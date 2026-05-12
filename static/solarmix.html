@@ -1223,10 +1223,10 @@ async function start() {
     knotWire.rotation.x = tnow * 0.2 + hand.y * 1.2;
     knotWire.rotation.y = tnow * 0.3 + hand.x * 1.8;
     knotWire.rotation.z = (hand.z - 0.5) * 1.4;
-    const sx = (0.7 + hand.x * 0.9) * (1 + lowE * 0.4);
-    const sy = (0.7 + hand.y * 0.9) * (1 - hand.pinch * 0.35) * (1 + highE * 0.3);
-    const sz = (0.7 + hand.z * 0.9);
-    knotWire.scale.set(sx, sy, sz);
+    const ksx = (0.7 + hand.x * 0.9) * (1 + lowE * 0.4);
+    const ksy = (0.7 + hand.y * 0.9) * (1 - hand.pinch * 0.35) * (1 + highE * 0.3);
+    const ksz = (0.7 + hand.z * 0.9);
+    knotWire.scale.set(ksx, ksy, ksz);
     // Drift the knot toward the leap cursor so it follows your hand around.
     knotWire.position.x = (hand.x - 0.5) * 1.8;
     knotWire.position.y = (hand.y - 0.5) * 1.4;
