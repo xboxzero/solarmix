@@ -74,6 +74,37 @@
     box-shadow: 0 0 30px var(--hot);
     opacity: 0.7;
   }
+  .keyboard {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; gap: 4px; z-index: 4;
+    padding: 8px 10px; max-width: calc(100vw - 24px);
+    background: rgba(4,7,10,0.62); border: 1px solid rgba(108,174,154,0.45);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    overflow-x: auto; touch-action: pan-x;
+  }
+  .keyboard::-webkit-scrollbar { display: none; }
+  .key {
+    flex: 0 0 auto;
+    width: 34px; height: 78px;
+    border: 1px solid rgba(108,174,154,0.55);
+    background: linear-gradient(180deg, rgba(255,79,216,0.04), rgba(108,174,154,0.10));
+    color: var(--ink); font: 10px/1.2 ui-monospace, monospace;
+    text-align: center; cursor: pointer; user-select: none;
+    -webkit-user-select: none; -webkit-touch-callout: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    padding-bottom: 6px;
+    transition: transform 60ms ease-out, box-shadow 120ms ease-out;
+    position: relative;
+  }
+  .key span.lbl { font-size: 9px; color: var(--dim); }
+  .key span.deg { font-size: 11px; color: var(--ink); letter-spacing: 0.06em; }
+  .key:hover { border-color: var(--hot); }
+  .key.active { transform: scaleY(0.94); box-shadow: 0 0 22px var(--hot), inset 0 0 14px rgba(255,79,216,0.5); border-color: var(--hot); }
+  .key.color-white  { background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04)); }
+  .key.color-pink   { background: linear-gradient(180deg, rgba(255,180,210,0.28), rgba(255,79,216,0.06)); }
+  .key.color-brown  { background: linear-gradient(180deg, rgba(190,130,80,0.26), rgba(120,70,30,0.06)); }
+  .key.color-blue   { background: linear-gradient(180deg, rgba(110,160,255,0.26), rgba(60,90,200,0.06)); }
+  .key.color-violet { background: linear-gradient(180deg, rgba(190,120,255,0.28), rgba(120,60,200,0.06)); }
 </style>
 </head>
 <body>
@@ -81,6 +112,7 @@
   <canvas id="scene"></canvas>
   <div id="grid"></div>
   <div class="hand-ring" id="ring"></div>
+  <div class="keyboard" id="kbd" aria-label="noise scale keyboard"></div>
 
   <div class="panel tl">
     <h2><span class="dot" id="leapDot"></span>leap / hand</h2>
@@ -464,26 +496,65 @@ async function start() {
     tuneOsc.start();
   }
 
-  // ===== Ch2 — noise palette =====
+  // ===== Ch2 — noise palette: low-level drone + keyboard-triggered scale notes =====
   const noiseBufs = {};
   for (const c of NOISE_COLORS) noiseBufs[c] = makeNoiseBuffer(ctx, c);
+
+  // Drone path: persistent lowpass whose cutoff is hand-X-controlled.
+  const noiseLP = ctx.createBiquadFilter();
+  noiseLP.type = 'lowpass';
+  noiseLP.frequency.value = 1800;
+  noiseLP.Q.value = 0.7;
+  const noiseDroneGain = ctx.createGain();
+  noiseDroneGain.gain.value = 0.18;       // drone stays quiet so key hits stand out
+  noiseLP.connect(noiseDroneGain);
+  noiseDroneGain.connect(ch[2].gain);
+
+  // Separate hot bus for keyboard-fired noise bursts.
+  const noiseKeyBus = ctx.createGain();
+  noiseKeyBus.gain.value = 0.9;
+  noiseKeyBus.connect(ch[2].gain);
+
   let noiseNode = null;
   function startNoise(color) {
     if (noiseNode) { try { noiseNode.stop(); } catch {} }
     const n = ctx.createBufferSource();
     n.buffer = noiseBufs[color];
     n.loop = true;
-    const filt = ctx.createBiquadFilter();
-    filt.type = 'lowpass';
-    filt.frequency.value = 4000;
-    filt.Q.value = 0.7;
-    n.connect(filt);
-    filt.connect(ch[2].gain);
+    n.connect(noiseLP);
     n.start();
     noiseNode = n;
-    noiseNode._filt = filt;
   }
   startNoise('pink');
+
+  // Fire a tonal noise burst at `midi` using `color` noise as source.
+  // High-Q bandpass + steep envelope so the noise reads as a pitched click/chime.
+  function playNoiseKey(midi, color, vel = 1.0) {
+    const now = ctx.currentTime;
+    const n = ctx.createBufferSource();
+    n.buffer = noiseBufs[color];
+    // Random start offset so each hit sounds different
+    n.loop = true;
+    // Bandpass tuned to the note frequency for a tonal burst
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = midiToFreq(midi);
+    bp.Q.value = 22;
+    // Companion shape for body
+    const peak = ctx.createBiquadFilter();
+    peak.type = 'peaking';
+    peak.frequency.value = midiToFreq(midi) * 2;
+    peak.Q.value = 6;
+    peak.gain.value = 8;
+    // Envelope
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.7 * vel, now + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0008, now + 0.35);
+    n.connect(bp); bp.connect(peak); peak.connect(g); g.connect(noiseKeyBus);
+    n.start(now, Math.random() * 2);
+    n.stop(now + 0.40);
+  }
 
   // ===== Ch3 — feedback rhythm (FDN) =====
   // 4-line feedback delay network. Cross-feedback matrix is the Hadamard pattern
@@ -693,8 +764,54 @@ async function start() {
     gM: document.getElementById('gM'),
   };
   let scaleName = 'pentMinor', rootClass = 2, meterName = '6/8 jig', noiseColor = 'pink';
-  document.getElementById('scaleSel').addEventListener('change', e => scaleName = e.target.value);
-  document.getElementById('rootSel').addEventListener('change', e => rootClass = +e.target.value);
+
+  // ===== Visual keyboard: scale degrees -> noise-color bursts =====
+  const kbdEl = document.getElementById('kbd');
+  let keyboardKeys = []; // { el, midi, color }
+  function buildKeyboard() {
+    kbdEl.innerHTML = '';
+    keyboardKeys = [];
+    const scale = SCALES[scaleName] || SCALES.major;
+    const baseMidi = 48 + rootClass; // C3 + root offset
+    // Span ~1.5 octaves of the scale, capped at 14 keys for screen width.
+    const span = Math.min(14, Math.max(7, scale.length * 2));
+    for (let i = 0; i < span; i++) {
+      const oct = Math.floor(i / scale.length);
+      const deg = i % scale.length;
+      const midi = baseMidi + scale[deg] + 12 * oct;
+      const color = NOISE_COLORS[i % NOISE_COLORS.length];
+      const el = document.createElement('div');
+      el.className = 'key color-' + color;
+      const noteName = NOTE_NAMES[midi % 12];
+      const noteOct = Math.floor(midi / 12) - 1;
+      el.innerHTML = `<span class="deg">${deg + 1}</span><span class="lbl">${noteName}${noteOct}</span><span class="lbl" style="opacity:0.6">${color}</span>`;
+      el.dataset.midi = midi;
+      el.dataset.color = color;
+      // pointerdown handles mouse + touch + stylus uniformly
+      const hit = (vel) => {
+        playNoiseKey(midi, color, vel);
+        el.classList.add('active');
+        setTimeout(() => el.classList.remove('active'), 140);
+      };
+      el.addEventListener('pointerdown', e => { e.preventDefault(); hit(1.0); });
+      kbdEl.appendChild(el);
+      keyboardKeys.push({ el, midi, color });
+    }
+  }
+  buildKeyboard();
+
+  // Fire a key by horizontal screen position (0..1). Used by leap-pinch trigger.
+  function triggerKeyAtX(x01, vel) {
+    if (!keyboardKeys.length) return;
+    const idx = Math.min(keyboardKeys.length - 1, Math.max(0, Math.floor(x01 * keyboardKeys.length)));
+    const k = keyboardKeys[idx];
+    playNoiseKey(k.midi, k.color, vel);
+    k.el.classList.add('active');
+    setTimeout(() => k.el.classList.remove('active'), 140);
+  }
+
+  document.getElementById('scaleSel').addEventListener('change', e => { scaleName = e.target.value; buildKeyboard(); });
+  document.getElementById('rootSel').addEventListener('change', e => { rootClass = +e.target.value; buildKeyboard(); });
   document.getElementById('meterSel').addEventListener('change', e => meterName = e.target.value);
   document.getElementById('noiseSel').addEventListener('change', e => { noiseColor = e.target.value; startNoise(noiseColor); });
 
@@ -743,32 +860,49 @@ async function start() {
   let lastQT = 0;
   setInterval(() => { stepCircuit(hand.x, hand.z); }, 1800);
 
-  // ===== Sample camera centroid -> drive cam-osc pitch =====
+  // ===== Sample camera centroid + motion -> drive cam-osc pitch/filter/amplitude =====
+  // Motion = sum of absolute per-pixel grayscale delta vs previous frame,
+  // normalized to 0..1. Spikes can trigger FDN impulses.
+  let prevGray = null;
   function sampleCamera() {
     if (!camEl.complete || camEl.naturalWidth === 0) return null;
     try {
       camCtx.drawImage(camEl, 0, 0, camCanvas.width, camCanvas.height);
       const id = camCtx.getImageData(0, 0, camCanvas.width, camCanvas.height).data;
-      let sumX = 0, sumY = 0, sumW = 0, sumBright = 0;
+      const N = camCanvas.width * camCanvas.height;
+      let sumX = 0, sumY = 0, sumW = 0, sumBright = 0, motion = 0;
+      const hasPrev = prevGray && prevGray.length === N;
+      if (!hasPrev) prevGray = new Float32Array(N);
       for (let y = 0; y < camCanvas.height; y++) {
         for (let x = 0; x < camCanvas.width; x++) {
           const i = (y * camCanvas.width + x) * 4;
           const b = (id[i] + id[i+1] + id[i+2]) / 3;
           sumX += x * b; sumY += y * b; sumW += b; sumBright += b;
+          const pi = y * camCanvas.width + x;
+          if (hasPrev) motion += Math.abs(b - prevGray[pi]);
+          prevGray[pi] = b;
         }
       }
       if (sumW === 0) return null;
       return {
         cx: sumX / sumW / camCanvas.width,
         cy: sumY / sumW / camCanvas.height,
-        bright: sumBright / (camCanvas.width * camCanvas.height * 255),
+        bright: sumBright / (N * 255),
+        motion: hasPrev ? Math.min(1, motion / (N * 64)) : 0, // 64 = soft normalization
       };
     } catch { return null; }
   }
 
+  // Pinch edge detection for keyboard-trigger gestures.
+  let prevPinch = 0;
+  // Smoothed motion energy for camera-driven amplitude swell.
+  let motionEnv = 0;
+  let motionTriggerCooldown = 0;
+
   // ===== Animation / scheduler loop =====
   function loop(t) {
     requestAnimationFrame(loop);
+    const nowT = ctx.currentTime;
 
     // ---- Leap timeout -> mouse fallback ----
     if (performance.now() - lastLeapT > 1500 && hand.src !== 'mouse') setSrc('mouse');
@@ -783,31 +917,55 @@ async function start() {
     ring.style.width = ring.style.height = (40 + hand.pinch * 80) + 'px';
     ring.style.borderColor = hand.pinch > 0.5 ? 'var(--warn)' : 'var(--hot)';
 
-    // ---- Master volume from hand Y ----
+    // ---- Master volume from hand Y (snappy) ----
     const masterTarget = 0.05 + hand.y * 0.95;
-    master.gain.setTargetAtTime(masterTarget, ctx.currentTime, 0.05);
+    master.gain.setTargetAtTime(masterTarget, nowT, 0.008);
 
     // ---- Channel gains shaped by quantum routing + pinch ----
-    // routePerm tells which channel gets boosted to which "slot"
-    const base = [0.55, 0.50, 0.35, 0.65];
+    const base = [0.55, 0.50, 0.45, 0.65];
     for (let i = 0; i < 4; i++) {
       const slot = routePerm.indexOf(i);
       const route = 0.55 + 0.35 * (slot / 3);
       const g = base[i] * route * (0.4 + 0.6 * masterTarget);
-      ch[i].gain.gain.setTargetAtTime(g, ctx.currentTime, 0.08);
+      ch[i].gain.gain.setTargetAtTime(g, nowT, 0.05);
       ch[i].value = g;
     }
-    // Feedback channel response to hand Z
+    // Feedback channel response to hand Z (snappy)
     const fbAmt = 0.30 + 0.65 * hand.z;
-    for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, ctx.currentTime, 0.1);
+    for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, nowT, 0.02);
 
-    // ---- Cam-osc pitch from image centroid + scale snap ----
+    // ---- Hand X -> noise lowpass cutoff (drone tone tracks the hand) ----
+    const noiseCutoff = 250 + hand.x * 7000;
+    noiseLP.frequency.setTargetAtTime(noiseCutoff, nowT, 0.01);
+
+    // ---- Pinch rising edge -> fire a keyboard hit at the hand-X position ----
+    if (hand.pinch > 0.55 && prevPinch <= 0.55) {
+      triggerKeyAtX(hand.x, 0.7 + 0.3 * hand.pinch);
+    }
+    prevPinch = hand.pinch;
+
+    // ---- Cam-osc: pitch / filter / Q / amplitude all from a single sample ----
     const cam = sampleCamera();
     if (cam) {
-      const midiRaw = 40 + Math.floor(cam.cx * 36); // 3 octaves across X
+      // X: pitch across 3 octaves, scale-snapped, very snappy
+      const midiRaw = 40 + Math.floor(cam.cx * 36);
       const midi = snapMidi(midiRaw, scaleName, rootClass);
-      camOsc.frequency.setTargetAtTime(midiToFreq(midi), ctx.currentTime, 0.05);
-      camFilt.frequency.setTargetAtTime(300 + cam.bright * 3500, ctx.currentTime, 0.05);
+      camOsc.frequency.setTargetAtTime(midiToFreq(midi), nowT, 0.005);
+      // brightness -> bandpass center
+      camFilt.frequency.setTargetAtTime(300 + cam.bright * 3700, nowT, 0.008);
+      // cam.cy -> Q (resonance). Top of frame = bright/screamy, bottom = mellow.
+      const qVal = 2 + (1 - cam.cy) * 16;
+      camFilt.Q.setTargetAtTime(qVal, nowT, 0.02);
+      // Motion: slow envelope follower for amplitude swell + spike trigger
+      motionEnv = motionEnv * 0.82 + cam.motion * 0.18;
+      const motionGain = 0.05 + Math.min(0.95, motionEnv * 6) * 0.5;
+      camOscGain.gain.setTargetAtTime(motionGain, nowT, 0.02);
+      // Sudden movement -> fire an FDN impulse on the current cam pitch.
+      if (motionTriggerCooldown > 0) motionTriggerCooldown -= 1/60;
+      if (cam.motion > 0.07 && motionTriggerCooldown <= 0) {
+        fireImpulse(midi, 0.5 + Math.min(0.4, cam.motion * 4));
+        motionTriggerCooldown = 0.12;
+      }
     }
 
     // ---- Mic autotune-lite ----
