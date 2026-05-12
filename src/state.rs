@@ -69,6 +69,8 @@ pub struct SharedState {
 
     // recording
     pub recording: AtomicBool,
+    /// Mic is "open": live-mix the mic in *and* auto-record when speech is detected.
+    pub mic_enabled: AtomicBool,
 
     // automation (LFO across all params)
     pub automation_enabled: AtomicBool,
@@ -128,6 +130,7 @@ impl SharedState {
             ],
 
             recording: AtomicBool::new(false),
+            mic_enabled: AtomicBool::new(false),
 
             automation_enabled: AtomicBool::new(false),
             automation_rate: AtomicF32::new(0.15),

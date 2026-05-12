@@ -1,9 +1,17 @@
 // SolarMix — minimal 3D water UI.
 // Touch/drag the orb to control frequency (x), amp (y), and quantum chaos (z).
 // Water surface deforms from quantum signals + audio output level.
-// Uses Three.js via importmap.
+// Three.js is self-hosted under /vendor/ so it works offline on the Pi.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three.module.js';
+
+// surface any load error so it's visible on screen (Safari sometimes hides them)
+window.addEventListener('error', e => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:60px;left:20px;right:20px;background:#3a0808;color:#ffeaea;padding:14px;border:1px solid #ff5050;border-radius:6px;font-family:monospace;font-size:12px;z-index:100;white-space:pre-wrap';
+  d.textContent = 'JS error: ' + (e.error ? (e.error.stack || e.message) : e.message);
+  document.body.appendChild(d);
+});
 
 // ---------- WebSocket ----------
 const wsStatus = document.getElementById('ws-status');
@@ -148,19 +156,26 @@ function startDrag(e) {
   if (p) {
     orb.position.x = THREE.MathUtils.clamp(p.x, -4, 4);
     orb.position.z = THREE.MathUtils.clamp(p.z, -3, 3);
+    sendOrb();
   }
-  e.preventDefault();
+  if (e.cancelable) e.preventDefault();
 }
 function moveDrag(e) {
   if (!dragging) return;
+  // single-finger drag: x/z on plane. Multi-touch handled in pinch listener.
+  if (e.touches && e.touches.length > 1) return;
   const t = e.touches ? e.touches[0] : e;
   const p = pickOrPlane(t.clientX, t.clientY);
   if (p) {
     orb.position.x = THREE.MathUtils.clamp(p.x, -4, 4);
     orb.position.z = THREE.MathUtils.clamp(p.z, -3, 3);
+    // also lift the orb a bit while dragging vertically across the screen
+    // so users without a wheel/pinch still get amp control
+    const yScreen = (t.clientY / window.innerHeight); // 0 top, 1 bottom
+    orb.position.y = THREE.MathUtils.lerp(2.0, 0.2, yScreen);
     sendOrb();
   }
-  e.preventDefault();
+  if (e.cancelable) e.preventDefault();
 }
 function endDrag() {
   dragging = false;
@@ -178,9 +193,12 @@ canvas.addEventListener('mousedown', startDrag);
 window.addEventListener('mousemove', moveDrag);
 window.addEventListener('mouseup', endDrag);
 canvas.addEventListener('touchstart', startDrag, { passive: false });
-window.addEventListener('touchmove', moveDrag, { passive: false });
-window.addEventListener('touchend', endDrag);
+canvas.addEventListener('touchmove', moveDrag, { passive: false });
+canvas.addEventListener('touchend', endDrag);
+canvas.addEventListener('touchcancel', endDrag);
 canvas.addEventListener('wheel', onWheel, { passive: false });
+// also accept pointerdown for stylus / Apple Pencil
+canvas.addEventListener('pointerdown', startDrag);
 
 // two-finger pinch on touch devices for the Y axis
 let lastPinch = null;
@@ -201,18 +219,21 @@ canvas.addEventListener('touchmove', e => {
 }, { passive: false });
 
 function sendOrb() {
-  // x -> [-1, 1] (left = low freq, right = high freq)
-  // y -> [-1, 1] (high = loud, mapped from world Y in 0.1..2.2)
-  // z -> [-1, 1] (front = high chaos, back = smooth)
+  // Orb is the "frequencies + chaos mixer":
+  //   x -> reverb wet/dry
+  //   y -> tape echo feedback (from drag-up = louder)
+  //   z -> quantum chaos (pinch/wheel)
   const nx = THREE.MathUtils.clamp(orb.position.x / 4, -1, 1);
   const ny = THREE.MathUtils.clamp((orb.position.y - 0.1) / 2.1 * 2 - 1, -1, 1);
   const nz = THREE.MathUtils.clamp(orb.position.z / 3, -1, 1);
   send({ type: 'orb', x: nx, y: ny, z: nz });
-  // local readout
-  const lmin = Math.log(40), lmax = Math.log(2000);
-  const freq = Math.exp(lmin + (nx + 1) * 0.5 * (lmax - lmin));
+  // local readout (mirrors server-side mapping)
+  const r = Math.min(1, Math.hypot(nx, ny));
+  const lmin = Math.log(60), lmax = Math.log(1500);
+  const freq = Math.exp(lmin + r * (lmax - lmin));
   document.getElementById('freq-val').textContent = freq.toFixed(0) + ' Hz';
-  document.getElementById('amp-val').textContent = (((ny + 1) * 0.5) * 100).toFixed(0) + '%';
+  document.getElementById('rev-val').textContent = (((nx + 1) * 0.5) * 85).toFixed(0) + '%';
+  document.getElementById('del-val').textContent = (((ny + 1) * 0.5) * 85).toFixed(0) + '%';
   document.getElementById('chaos-val').textContent = (((nz + 1) * 0.5) * 100).toFixed(0) + '%';
 }
 
@@ -277,6 +298,11 @@ playBtn.addEventListener('click', () => {
   send({ type: 'toggle', id: 'drum' });
 });
 
+const micBtn = document.getElementById('mic-btn');
+micBtn.addEventListener('click', () => {
+  send({ type: 'toggle', id: 'mic' });
+});
+
 const recBtn = document.getElementById('rec-btn');
 let recording = false;
 recBtn.addEventListener('click', () => {
@@ -327,8 +353,12 @@ function onTick(m) {
     lastStep = -1;
   }
 
-  // sync play/rec button states from server
+  // sync play/rec/mic button states from server
   playBtn.classList.toggle('on', m.drum_on);
+  micBtn.classList.toggle('on', m.mic_on);
+  // when mic is open AND server is recording, flag the VOX glow on the mic
+  // button — distinguishes auto-record from a manual REC press
+  micBtn.classList.toggle('vox', m.mic_on && m.recording);
   if (recBtn.classList.contains('on') !== m.recording) {
     recording = m.recording;
     recBtn.classList.toggle('on', recording);

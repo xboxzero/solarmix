@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tower_http::services::ServeDir;
 
 use crate::audio::engine::EngineHandle;
@@ -65,11 +65,14 @@ struct OutMsg {
     drum_step: u8,
     recording: bool,
     drum_on: bool,
+    mic_on: bool,
     preset: u8,
     bpm: f32,
     // four quantum signals so the UI can deform the water surface
     q0: f32, q1: f32, q2: f32, q3: f32,
     chaos: f32,
+    reverb: f32,
+    delay_fb: f32,
 }
 
 async fn socket_loop(socket: WebSocket, app: AppState) {
@@ -81,19 +84,66 @@ async fn socket_loop(socket: WebSocket, app: AppState) {
     // We don't expose qmod directly here, so we re-derive from a phase that follows
     // input/output levels (cheap & expressive enough for water deformation).
     let s_meter = s.clone();
+    let eng_vox = eng.clone();
     let meter_task = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_millis(33));
         let mut phase: f32 = 0.0;
+        // VOX state
+        let mut vox_above_since: Option<Instant> = None;
+        let mut vox_last_active: Option<Instant> = None;
+        let mut vox_recording = false;
+        // user can also start recording manually via the REC button; only the VOX
+        // path uses this flag to know it should auto-stop on silence.
         loop {
             ticker.tick().await;
             phase = (phase + 0.07).rem_euclid(std::f32::consts::TAU);
             let chaos = s_meter.quantum_amount.get();
-            // four pseudo-quantum control signals — cheap sin/cos network.
-            // The audio thread has its own QuantumMod; this is just for visuals.
             let q0 = (phase * 0.7).sin();
             let q1 = (phase * 1.3 + 1.2).sin();
             let q2 = (phase * 0.9 + 2.4).sin();
             let q3 = (phase * 1.7 + 3.1).sin();
+
+            // -------- VOX auto-record state machine --------
+            let mic_on = s_meter.mic_enabled.load(Ordering::Relaxed);
+            let lvl = s_meter.input_level.get();
+            let now = Instant::now();
+            const VOX_THRESHOLD: f32 = 0.012; // RMS
+            const VOX_START_AFTER: Duration = Duration::from_millis(250);
+            const VOX_STOP_AFTER:  Duration = Duration::from_millis(2200);
+            if mic_on {
+                if lvl > VOX_THRESHOLD {
+                    vox_last_active = Some(now);
+                    vox_above_since.get_or_insert(now);
+                    if !vox_recording {
+                        if let Some(t0) = vox_above_since {
+                            if now.duration_since(t0) >= VOX_START_AFTER {
+                                eng_vox.start_recording();
+                                vox_recording = true;
+                            }
+                        }
+                    }
+                } else {
+                    vox_above_since = None;
+                    if vox_recording {
+                        let silent_for = vox_last_active
+                            .map(|t| now.duration_since(t))
+                            .unwrap_or(Duration::ZERO);
+                        if silent_for >= VOX_STOP_AFTER {
+                            eng_vox.stop_recording();
+                            vox_recording = false;
+                        }
+                    }
+                }
+            } else {
+                // mic closed — abandon VOX, stop only if we started it
+                vox_above_since = None;
+                vox_last_active = None;
+                if vox_recording {
+                    eng_vox.stop_recording();
+                    vox_recording = false;
+                }
+            }
+
             let msg = OutMsg {
                 kind: "tick",
                 in_level: s_meter.input_level.get(),
@@ -101,9 +151,12 @@ async fn socket_loop(socket: WebSocket, app: AppState) {
                 drum_step: s_meter.current_step.load(Ordering::Relaxed),
                 recording: s_meter.recording.load(Ordering::Relaxed),
                 drum_on: s_meter.drum_enabled.load(Ordering::Relaxed),
+                mic_on,
                 preset: s_meter.drum_preset.load(Ordering::Relaxed),
                 bpm: s_meter.drum_bpm.get(),
                 q0, q1, q2, q3, chaos,
+                reverb: s_meter.reverb_mix.get(),
+                delay_fb: s_meter.delay_feedback.get(),
             };
             let txt = serde_json::to_string(&msg).unwrap_or_default();
             if tx.send(Message::Text(txt)).await.is_err() { break; }
@@ -150,6 +203,7 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
             "auto_mix"   => { let v = s.auto_mix.load(Ordering::Relaxed); s.auto_mix.store(!v, Ordering::Relaxed); }
             "drum"       => { let v = s.drum_enabled.load(Ordering::Relaxed); s.drum_enabled.store(!v, Ordering::Relaxed); }
             "automation" => { let v = s.automation_enabled.load(Ordering::Relaxed); s.automation_enabled.store(!v, Ordering::Relaxed); }
+            "mic"        => { let v = s.mic_enabled.load(Ordering::Relaxed); s.mic_enabled.store(!v, Ordering::Relaxed); }
             _ => {}
         },
         InMsg::Drum { voice, step } => {
@@ -167,19 +221,39 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
             s.exp_waveform.store(value.min(4), Ordering::Relaxed);
         }
         InMsg::Orb { x, y, z } => {
-            // map x,y,z (~[-1,1]) to musically useful ranges.
-            // x: pan-ish but here drives experiment frequency along a log scale (40..2000 Hz)
-            // y: drives experiment amplitude (0..0.5)
-            // z: drives quantum chaos (0..1)
-            let nx = (x.clamp(-1.0, 1.0) + 1.0) * 0.5;            // 0..1
-            let ny = (y.clamp(-1.0, 1.0) + 1.0) * 0.5;            // 0..1
-            let nz = (z.clamp(-1.0, 1.0) + 1.0) * 0.5;            // 0..1
-            let lmin = 40.0_f32.ln();
-            let lmax = 2000.0_f32.ln();
-            let freq = (lmin + nx * (lmax - lmin)).exp();
-            s.exp_freq.set(freq);
-            s.exp_amp.set(ny * 0.5);
+            // The orb is the "frequencies + chaos mixer". Each axis links to one
+            // of the wet effects so you sculpt reverb + tape echo with your hand:
+            //   X -> reverb wet/dry      (left = dry, right = wet)
+            //   Y -> tape echo feedback  (down = clean, up = smeared)
+            //   Z -> quantum chaos       (near = smooth, far = entangled)
+            // Plus the orb's radial distance from origin drives the exp tone
+            // frequency so you hear an audible frequency sweep as you move it.
+            let nx = (x.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let ny = (y.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let nz = (z.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let r = (x * x + y * y).sqrt().min(1.0);
+
+            // reverb
+            s.reverb_mix.set((nx * 0.85).clamp(0.0, 0.95));
+            s.reverb_size.set((0.35 + ny * 0.55).clamp(0.0, 0.95));
+
+            // tape echo (delay)
+            s.delay_feedback.set((ny * 0.85).clamp(0.0, 0.88));
+            s.delay_mix.set((0.15 + nx * 0.55).clamp(0.0, 0.8));
+            // delay time follows radial distance: tight slap-back at center,
+            // long tape-warble at the edges (80..900ms)
+            s.delay_time_ms.set(80.0 + r * 820.0);
+
+            // quantum chaos
             s.quantum_amount.set(nz.clamp(0.0, 1.0));
+
+            // audible frequency sweep (log scale, 60..1500 Hz)
+            let lmin = 60.0_f32.ln();
+            let lmax = 1500.0_f32.ln();
+            let freq = (lmin + r * (lmax - lmin)).exp();
+            s.exp_freq.set(freq);
+            // small constant amp so it's audible but never overpowers a vocal mic
+            s.exp_amp.set(0.06);
         }
     }
 }

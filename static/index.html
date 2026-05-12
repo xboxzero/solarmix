@@ -24,11 +24,12 @@
 <aside class="hud-side">
   <div class="readout">
     <div><span class="lbl">FREQ</span><span id="freq-val">220 Hz</span></div>
-    <div><span class="lbl">AMP</span><span id="amp-val">0%</span></div>
+    <div><span class="lbl">REVERB</span><span id="rev-val">0%</span></div>
+    <div><span class="lbl">TAPE FB</span><span id="del-val">0%</span></div>
     <div><span class="lbl">CHAOS</span><span id="chaos-val">30%</span></div>
     <div><span class="lbl">BPM</span><span id="bpm-val">96</span></div>
   </div>
-  <div class="hint">Drag the orb · up/down = amp · left/right = freq · push/pull = chaos</div>
+  <div class="hint">Drag orb · ↔ reverb wet · ↕ tape echo feedback · pinch/wheel = chaos. Open the MIC and it auto-records when you speak.</div>
 </aside>
 
 <footer class="hud-bot">
@@ -41,19 +42,18 @@
     <button data-preset="5">DnB</button>
   </div>
   <div class="ctrls">
+    <button id="mic-btn" class="mic">🎤 MIC</button>
     <button id="play-btn" class="on">▶ DRUMS</button>
     <button id="rec-btn" class="rec">● REC</button>
   </div>
   <div class="steps" id="steps"></div>
 </footer>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
-  }
-}
-</script>
 <script type="module" src="app.js"></script>
+<script nomodule>
+  document.body.insertAdjacentHTML('beforeend',
+    '<div style="position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ffd47a;font-family:system-ui;text-align:center;padding:20px;z-index:99">'+
+    'Safari is too old for ES modules.<br>Please update Safari (16.4+) or use a recent browser.</div>');
+</script>
 </body>
 </html>

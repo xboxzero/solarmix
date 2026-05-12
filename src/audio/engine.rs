@@ -114,12 +114,14 @@ impl Engine {
             // collapse to mono
             let mut rms_sq = 0.0;
             let frames = data.len() / in_channels.max(1);
+            let mic_open = state_in.mic_enabled.load(Ordering::Relaxed);
+            let gain = if mic_open { state_in.input_gain.get() } else { 0.0 };
             for f in 0..frames {
                 let base = f * in_channels;
                 let mut s = 0.0;
                 for c in 0..in_channels { s += data[base + c]; }
                 s /= in_channels as f32;
-                s *= state_in.input_gain.get();
+                s *= gain;
                 rms_sq += s * s;
 
                 // simple linear resampler: emit while phase < ratio
@@ -260,11 +262,18 @@ impl Engine {
             };
 
             let t_master = state_out.master_gain.get();
-            let t_rev_mix = mix_q(state_out.reverb_mix.get(), qout[1], 0.15).clamp(0.0, 1.0);
-            let t_rev_size = mix_q(state_out.reverb_size.get(), qout[2], 0.15).clamp(0.0, 1.0);
-            let t_rev_damp = state_out.reverb_damp.get();
-            let t_del_time = auto_blend(state_out.delay_time_ms.get(), 50.0 + auto_lfo * 700.0, 0.3);
-            let t_del_fb = mix_q(state_out.delay_feedback.get(), qout[3], 0.12).clamp(0.0, 0.9);
+            // Quantum chaos now swirls reverb + tape echo strongly:
+            let t_rev_mix = mix_q(state_out.reverb_mix.get(), qout[1], 0.20).clamp(0.0, 1.0);
+            let t_rev_size = mix_q(state_out.reverb_size.get(), qout[2], 0.35).clamp(0.05, 0.98);
+            let t_rev_damp = (state_out.reverb_damp.get() + qout[0] * 0.15 * chaos).clamp(0.0, 1.0);
+            // tape echo time wobbles up to ±220ms when chaos is high — classic tape warble
+            let t_del_chaos_mod = qout[3] * 220.0 * chaos;
+            let t_del_time = auto_blend(
+                state_out.delay_time_ms.get() + t_del_chaos_mod,
+                50.0 + auto_lfo * 700.0,
+                0.3,
+            ).clamp(20.0, 1500.0);
+            let t_del_fb = mix_q(state_out.delay_feedback.get(), qout[3], 0.18).clamp(0.0, 0.92);
             let t_del_mix = state_out.delay_mix.get();
             let t_eq_lo = state_out.eq_low_db.get();
             let t_eq_mi = state_out.eq_mid_db.get();
@@ -311,8 +320,9 @@ impl Engine {
             let bpm = state_out.drum_bpm.get();
             if (bpm - prev_bpm).abs() > 0.1 { drums.set_bpm(bpm); prev_bpm = bpm; }
 
-            // auto-mix: target an RMS
-            let auto_on_mix = state_out.auto_mix.load(Ordering::Relaxed);
+            // auto-mix: target an RMS (only while mic is open)
+            let mic_open = state_out.mic_enabled.load(Ordering::Relaxed);
+            let auto_on_mix = state_out.auto_mix.load(Ordering::Relaxed) && mic_open;
             let target_rms = state_out.auto_mix_target.get();
             let in_rms = state_out.input_level.get().max(1e-5);
             if auto_on_mix {
