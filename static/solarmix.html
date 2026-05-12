@@ -527,33 +527,51 @@ async function start() {
   }
   startNoise('pink');
 
-  // Fire a tonal noise burst at `midi` using `color` noise as source.
-  // High-Q bandpass + steep envelope so the noise reads as a pitched click/chime.
+  // Fire a tonal noise burst at `midi` using `color` noise as source, with a
+  // triangle sub-osc one octave down for body. High-Q bandpass + steep envelope
+  // turns the noise into a pitched chime; the sub adds the bass weight.
   function playNoiseKey(midi, color, vel = 1.0) {
     const now = ctx.currentTime;
+    const baseHz = midiToFreq(midi);
+    // ---- noise body ----
     const n = ctx.createBufferSource();
     n.buffer = noiseBufs[color];
-    // Random start offset so each hit sounds different
     n.loop = true;
-    // Bandpass tuned to the note frequency for a tonal burst
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = midiToFreq(midi);
+    bp.frequency.value = baseHz;
     bp.Q.value = 22;
-    // Companion shape for body
     const peak = ctx.createBiquadFilter();
     peak.type = 'peaking';
-    peak.frequency.value = midiToFreq(midi) * 2;
+    peak.frequency.value = baseHz * 2;
     peak.Q.value = 6;
     peak.gain.value = 8;
-    // Envelope
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(0.7 * vel, now + 0.004);
-    g.gain.exponentialRampToValueAtTime(0.0008, now + 0.35);
-    n.connect(bp); bp.connect(peak); peak.connect(g); g.connect(noiseKeyBus);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0, now);
+    ng.gain.linearRampToValueAtTime(0.7 * vel, now + 0.004);
+    ng.gain.exponentialRampToValueAtTime(0.0008, now + 0.42);
+    n.connect(bp); bp.connect(peak); peak.connect(ng); ng.connect(noiseKeyBus);
     n.start(now, Math.random() * 2);
-    n.stop(now + 0.40);
+    n.stop(now + 0.48);
+
+    // ---- sub-bass: triangle 1 octave down through a lowpass for warmth ----
+    const sub = ctx.createOscillator();
+    sub.type = 'triangle';
+    sub.frequency.value = baseHz * 0.5;
+    // Slight pitch glide for a "plucked" sub feel
+    sub.frequency.setValueAtTime(baseHz * 0.5 * 1.05, now);
+    sub.frequency.exponentialRampToValueAtTime(baseHz * 0.5, now + 0.04);
+    const subLP = ctx.createBiquadFilter();
+    subLP.type = 'lowpass';
+    subLP.frequency.value = Math.min(900, baseHz * 4);
+    subLP.Q.value = 0.6;
+    const sg = ctx.createGain();
+    sg.gain.setValueAtTime(0, now);
+    sg.gain.linearRampToValueAtTime(0.50 * vel, now + 0.012);
+    sg.gain.exponentialRampToValueAtTime(0.0008, now + 0.85);
+    sub.connect(subLP); subLP.connect(sg); sg.connect(noiseKeyBus);
+    sub.start(now);
+    sub.stop(now + 0.90);
   }
 
   // ===== Ch3 — feedback rhythm (FDN) =====
@@ -695,17 +713,66 @@ async function start() {
   function fireBolt(theta) {
     const b = bolts.find(b => b.life <= 0);
     if (!b) return;
-    const r1 = 1.5 + Math.random();
     const r2 = 2.5 + Math.random() * 2;
-    b.pos[0] = Math.cos(theta) * r1;
-    b.pos[1] = Math.sin(theta) * r1;
-    b.pos[2] = (Math.random() - 0.5) * 1.5;
-    b.pos[3] = Math.cos(theta + (Math.random() - 0.5)) * r2;
-    b.pos[4] = Math.sin(theta + (Math.random() - 0.5)) * r2;
-    b.pos[5] = (Math.random() - 0.5) * 2.5;
+    // Origin: the leap cursor in 3D space. Each rhythm hit shoots a bolt away
+    // from your hand into the scene, making leap motion visibly cause hits.
+    const ox = leapGroup.position.x;
+    const oy = leapGroup.position.y;
+    const oz = leapGroup.position.z;
+    b.pos[0] = ox;
+    b.pos[1] = oy;
+    b.pos[2] = oz;
+    b.pos[3] = ox + Math.cos(theta) * r2;
+    b.pos[4] = oy + Math.sin(theta) * r2;
+    b.pos[5] = oz + (Math.random() - 0.5) * 2.5;
     b.line.geometry.attributes.position.needsUpdate = true;
     b.life = 1;
     b.mat.opacity = 1;
+  }
+
+  // ===== 3D leap cursor: glowing sphere + crosshair + history trail =====
+  const leapGroup = new THREE.Group();
+  scene.add(leapGroup);
+  const leapSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 18, 14),
+    new THREE.MeshBasicMaterial({ color: 0xff4fd8, transparent: true, opacity: 0.85 })
+  );
+  leapGroup.add(leapSphere);
+  // Wireframe shell for the sphere -- gives it depth
+  const leapShell = new THREE.Mesh(
+    new THREE.SphereGeometry(0.32, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd84f, wireframe: true, transparent: true, opacity: 0.5 })
+  );
+  leapGroup.add(leapShell);
+  // Crosshair lines at the cursor
+  const crossPos = new Float32Array([
+    -0.55, 0, 0,  0.55, 0, 0,
+    0, -0.55, 0,  0, 0.55, 0,
+    0, 0, -0.55,  0, 0, 0.55,
+  ]);
+  const crossGeo = new THREE.BufferGeometry();
+  crossGeo.setAttribute('position', new THREE.BufferAttribute(crossPos, 3));
+  const crossMat = new THREE.LineBasicMaterial({ color: 0xff4fd8, transparent: true, opacity: 0.7 });
+  const leapCross = new THREE.LineSegments(crossGeo, crossMat);
+  leapGroup.add(leapCross);
+
+  // Trail of recent hand positions -- a fading polyline of N points.
+  const TRAIL_N = 80;
+  const trailPos = new Float32Array(TRAIL_N * 3);
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+  const trailMat = new THREE.LineBasicMaterial({ color: 0xff4fd8, transparent: true, opacity: 0.6 });
+  const leapTrail = new THREE.Line(trailGeo, trailMat);
+  scene.add(leapTrail);
+  function pushTrail(x, y, z) {
+    // Shift the whole buffer one point to the left, then write newest at end.
+    // copyWithin keeps oldest-to-newest order so the line draws correctly.
+    trailPos.copyWithin(0, 3);
+    const last = (TRAIL_N - 1) * 3;
+    trailPos[last]     = x;
+    trailPos[last + 1] = y;
+    trailPos[last + 2] = z;
+    trailGeo.attributes.position.needsUpdate = true;
   }
 
   window.addEventListener('resize', resize);
@@ -765,16 +832,26 @@ async function start() {
   };
   let scaleName = 'pentMinor', rootClass = 2, meterName = '6/8 jig', noiseColor = 'pink';
 
-  // ===== Visual keyboard: scale degrees -> noise-color bursts =====
+  // ===== Visual keyboard: scale degrees -> noise-color bursts (2 octaves) =====
   const kbdEl = document.getElementById('kbd');
   let keyboardKeys = []; // { el, midi, color }
+  function hitKeyEl(el, vel) {
+    if (!el || !el.classList || !el.classList.contains('key')) return;
+    const midi = +el.dataset.midi;
+    const color = el.dataset.color;
+    playNoiseKey(midi, color, vel);
+    el.classList.add('active');
+    setTimeout(() => el.classList.remove('active'), 140);
+  }
   function buildKeyboard() {
     kbdEl.innerHTML = '';
     keyboardKeys = [];
     const scale = SCALES[scaleName] || SCALES.major;
-    const baseMidi = 48 + rootClass; // C3 + root offset
-    // Span ~1.5 octaves of the scale, capped at 14 keys for screen width.
-    const span = Math.min(14, Math.max(7, scale.length * 2));
+    // Start an octave lower (C2) so the bottom keys give real bass weight,
+    // and span up to two octaves of the scale. Cap at 16 keys for screen width.
+    const baseMidi = 36 + rootClass;
+    const wanted = scale.length * 2 + 1; // two octaves + tonic on top
+    const span = Math.min(16, Math.max(7, wanted));
     for (let i = 0; i < span; i++) {
       const oct = Math.floor(i / scale.length);
       const deg = i % scale.length;
@@ -787,27 +864,50 @@ async function start() {
       el.innerHTML = `<span class="deg">${deg + 1}</span><span class="lbl">${noteName}${noteOct}</span><span class="lbl" style="opacity:0.6">${color}</span>`;
       el.dataset.midi = midi;
       el.dataset.color = color;
-      // pointerdown handles mouse + touch + stylus uniformly
-      const hit = (vel) => {
-        playNoiseKey(midi, color, vel);
-        el.classList.add('active');
-        setTimeout(() => el.classList.remove('active'), 140);
-      };
-      el.addEventListener('pointerdown', e => { e.preventDefault(); hit(1.0); });
       kbdEl.appendChild(el);
       keyboardKeys.push({ el, midi, color });
     }
   }
   buildKeyboard();
 
+  // Drag-across-keys for melody play (mouse + touch + stylus). Initial pointerdown
+  // releases pointer capture so subsequent pointermove events can detect other
+  // keys via document.elementFromPoint -- this is what makes touch drag work.
+  let kbdPointerDown = false;
+  let lastDragKey = null;
+  let dragVelEst = 1.0;
+  let lastDragT = 0, lastDragX = 0;
+  kbdEl.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    kbdPointerDown = true;
+    try { e.target.releasePointerCapture?.(e.pointerId); } catch {}
+    const k = e.target.closest('.key');
+    if (k) { hitKeyEl(k, 1.0); lastDragKey = k; }
+    lastDragT = e.timeStamp;
+    lastDragX = e.clientX;
+  });
+  kbdEl.addEventListener('pointermove', e => {
+    if (!kbdPointerDown) return;
+    // Velocity from horizontal sweep speed (px/ms), gently scaled
+    const dt = Math.max(1, e.timeStamp - lastDragT);
+    const speed = Math.abs(e.clientX - lastDragX) / dt;
+    dragVelEst = Math.min(1.0, 0.45 + speed * 1.5);
+    lastDragT = e.timeStamp; lastDragX = e.clientX;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const k = target?.closest?.('.key');
+    if (k && k !== lastDragKey) {
+      hitKeyEl(k, dragVelEst);
+      lastDragKey = k;
+    }
+  });
+  window.addEventListener('pointerup',   () => { kbdPointerDown = false; lastDragKey = null; });
+  window.addEventListener('pointercancel', () => { kbdPointerDown = false; lastDragKey = null; });
+
   // Fire a key by horizontal screen position (0..1). Used by leap-pinch trigger.
   function triggerKeyAtX(x01, vel) {
     if (!keyboardKeys.length) return;
     const idx = Math.min(keyboardKeys.length - 1, Math.max(0, Math.floor(x01 * keyboardKeys.length)));
-    const k = keyboardKeys[idx];
-    playNoiseKey(k.midi, k.color, vel);
-    k.el.classList.add('active');
-    setTimeout(() => k.el.classList.remove('active'), 140);
+    hitKeyEl(keyboardKeys[idx].el, vel);
   }
 
   document.getElementById('scaleSel').addEventListener('change', e => { scaleName = e.target.value; buildKeyboard(); });
@@ -849,7 +949,9 @@ async function start() {
     const m = METERS[meterName];
     // Each cell is a 12th or 16th, depending on len. bpm refers to quarter notes.
     const quarter = 60 / currentBpm();
-    return quarter * (m.len === 12 ? (1/3) : (1/4));
+    const base = quarter * (m.len === 12 ? (1/3) : (1/4));
+    // Pinch packs rhythm: full pinch = 3x density.
+    return base / (1 + hand.pinch * 2);
   }
 
   // ===== Frequency-driven dimension warp on the camera image =====
@@ -930,9 +1032,16 @@ async function start() {
       ch[i].gain.gain.setTargetAtTime(g, nowT, 0.05);
       ch[i].value = g;
     }
-    // Feedback channel response to hand Z (snappy)
-    const fbAmt = 0.30 + 0.65 * hand.z;
-    for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, nowT, 0.02);
+    // Feedback: hand Z drives base feedback, hand pinch shoves it higher (capped
+    // to avoid runaway). This makes pinching the hand do something dramatic.
+    const fbAmt = Math.min(0.95, 0.30 + 0.55 * hand.z + 0.20 * hand.pinch);
+    for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, nowT, 0.015);
+    // Hand Y stretches the FDN delay times in real-time -> the feedback's
+    // resonant pitch + decay character tracks the hand height.
+    const dBase = 0.06 + hand.y * 0.42;
+    for (let i = 0; i < FDN_N; i++) {
+      fdnDelays[i].delayTime.setTargetAtTime(dBase * (1 + i * 0.55), nowT, 0.02);
+    }
 
     // ---- Hand X -> noise lowpass cutoff (drone tone tracks the hand) ----
     const noiseCutoff = 250 + hand.x * 7000;
@@ -1044,11 +1153,30 @@ async function start() {
 
     // ---- 3D oscillator-lightning ----
     const tnow = t * 0.001;
-    knotWire.rotation.x = tnow * 0.2 + hand.y * 0.5;
-    knotWire.rotation.y = tnow * 0.3 + hand.x * 1.0;
-    knotWire.scale.setScalar(1 + lowE * 0.6);
+    knotWire.rotation.x = tnow * 0.2 + hand.y * 0.8;
+    knotWire.rotation.y = tnow * 0.3 + hand.x * 1.3;
+    knotWire.rotation.z = hand.z * 0.6;
+    knotWire.scale.setScalar(1 + lowE * 0.6 + hand.pinch * 0.4);
     knotMat.opacity = 0.35 + mlvl * 0.6;
     knotMat.color.setHSL((hand.x + tnow * 0.05) % 1, 0.85, 0.55);
+
+    // ---- Leap cursor + trail in the 3D scene ----
+    const lx = (hand.x - 0.5) * 5;
+    const ly = (hand.y - 0.5) * 4;
+    const lz = (hand.z - 0.5) * 4;
+    leapGroup.position.set(lx, ly, lz);
+    const pinchScale = 0.6 + hand.pinch * 1.4;
+    leapSphere.scale.setScalar(pinchScale + mlvl * 0.4);
+    leapSphere.material.opacity = 0.45 + hand.pinch * 0.45;
+    leapSphere.material.color.setHSL(hand.x, 0.9, 0.55);
+    leapShell.scale.setScalar(0.7 + hand.pinch * 1.3 + mlvl * 0.5);
+    leapShell.material.opacity = 0.25 + mlvl * 0.5;
+    leapShell.rotation.y = tnow * 0.6;
+    leapShell.rotation.x = tnow * 0.4;
+    crossMat.opacity = 0.35 + hand.pinch * 0.6;
+    pushTrail(lx, ly, lz);
+    trailMat.color.setHSL((hand.x + 0.55) % 1, 0.7, 0.6);
+    trailMat.opacity = 0.35 + mlvl * 0.5;
 
     // Deform the trace into an oscillator-around-knot ribbon
     for (let i = 0; i < TRACE_N; i++) {
