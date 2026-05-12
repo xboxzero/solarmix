@@ -380,13 +380,21 @@ document.getElementById('bootBtn').addEventListener('click', () => {
 
 // ============================================================================
 async function start() {
-  // ===== Mic =====
-  let micStream;
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  } catch (e) {
-    throw new Error('mic denied: ' + e.message);
+  // ===== Mic (optional: needs a secure context; falls back to silent ch1) =====
+  let micStream = null;
+  let micUnavailableReason = null;
+  if (!window.isSecureContext) {
+    micUnavailableReason = 'page not in a secure context (open via https:// or http://localhost) — ch1 silent';
+  } else if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    micUnavailableReason = 'getUserMedia unavailable in this browser — ch1 silent';
+  } else {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    } catch (e) {
+      micUnavailableReason = 'mic denied: ' + e.message + ' — ch1 silent';
+    }
   }
+  if (micUnavailableReason) console.warn('[solarmix]', micUnavailableReason);
 
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
 
@@ -435,26 +443,26 @@ async function start() {
   camOsc.frequency.value = midiToFreq(57);
   camOsc.start();
 
-  // ===== Ch1 — mic + autotune-lite =====
-  const micSrc = ctx.createMediaStreamSource(micStream);
-  // envelope follower: square -> 1-pole LPF via WaveShaper isn't ideal, use AnalyserNode polling.
-  const micAnalyser = ctx.createAnalyser();
-  micAnalyser.fftSize = 2048;
-  micAnalyser.smoothingTimeConstant = 0.1;
-  micSrc.connect(micAnalyser);
-  // dry mic at low level
-  const micDryGain = ctx.createGain();
-  micDryGain.gain.value = 0.15;
-  micSrc.connect(micDryGain);
-  micDryGain.connect(ch[1].gain);
-  // scale-snapped voice: sine osc, amplitude = mic env, freq = snapped detected pitch
-  const tuneOsc = ctx.createOscillator();
-  tuneOsc.type = 'sine';
-  const tuneGain = ctx.createGain();
-  tuneGain.gain.value = 0;
-  tuneOsc.connect(tuneGain);
-  tuneGain.connect(ch[1].gain);
-  tuneOsc.start();
+  // ===== Ch1 — mic + autotune-lite (skipped if no mic) =====
+  let micAnalyser = null, tuneOsc = null, tuneGain = null;
+  if (micStream) {
+    const micSrc = ctx.createMediaStreamSource(micStream);
+    micAnalyser = ctx.createAnalyser();
+    micAnalyser.fftSize = 2048;
+    micAnalyser.smoothingTimeConstant = 0.1;
+    micSrc.connect(micAnalyser);
+    const micDryGain = ctx.createGain();
+    micDryGain.gain.value = 0.15;
+    micSrc.connect(micDryGain);
+    micDryGain.connect(ch[1].gain);
+    tuneOsc = ctx.createOscillator();
+    tuneOsc.type = 'sine';
+    tuneGain = ctx.createGain();
+    tuneGain.gain.value = 0;
+    tuneOsc.connect(tuneGain);
+    tuneGain.connect(ch[1].gain);
+    tuneOsc.start();
+  }
 
   // ===== Ch2 — noise palette =====
   const noiseBufs = {};
@@ -691,8 +699,9 @@ async function start() {
   document.getElementById('noiseSel').addEventListener('change', e => { noiseColor = e.target.value; startNoise(noiseColor); });
 
   // ===== Pitch detection (autocorrelation, classic) =====
-  const micTime = new Float32Array(micAnalyser.fftSize);
+  const micTime = micAnalyser ? new Float32Array(micAnalyser.fftSize) : null;
   function detectPitchHz() {
+    if (!micAnalyser) return { hz: 0, rms: 0 };
     micAnalyser.getFloatTimeDomainData(micTime);
     let rms = 0;
     for (let i = 0; i < micTime.length; i++) rms += micTime[i] * micTime[i];
@@ -802,13 +811,15 @@ async function start() {
     }
 
     // ---- Mic autotune-lite ----
-    const det = detectPitchHz();
-    if (det.hz > 0) {
-      const midi = snapMidi(hzToMidi(det.hz), scaleName, rootClass);
-      tuneOsc.frequency.setTargetAtTime(midiToFreq(midi), ctx.currentTime, 0.03);
-      tuneGain.gain.setTargetAtTime(Math.min(0.45, det.rms * 6), ctx.currentTime, 0.02);
-    } else {
-      tuneGain.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+    if (tuneOsc && tuneGain) {
+      const det = detectPitchHz();
+      if (det.hz > 0) {
+        const midi = snapMidi(hzToMidi(det.hz), scaleName, rootClass);
+        tuneOsc.frequency.setTargetAtTime(midiToFreq(midi), ctx.currentTime, 0.03);
+        tuneGain.gain.setTargetAtTime(Math.min(0.45, det.rms * 6), ctx.currentTime, 0.02);
+      } else {
+        tuneGain.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+      }
     }
 
     // ---- Rhythm scheduler ----
