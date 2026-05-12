@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>SolarMix — Arcane Mixing Tome</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="tome">
+
+  <header class="banner">
+    <div class="banner-inner">
+      <div class="crest">☀</div>
+      <h1>SolarMix <span class="sub">— Arcane Mixing Tome —</span></h1>
+      <div class="meters">
+        <div class="meter"><label>IN</label><div class="bar"><span id="in-bar"></span></div></div>
+        <div class="meter"><label>OUT</label><div class="bar"><span id="out-bar"></span></div></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="parchment">
+
+    <!-- Mic / Master -->
+    <section class="panel half">
+      <h2>⚔ Channel ⚔</h2>
+      <div class="row">
+        <div class="knob-cell">
+          <div class="knob" data-id="input" data-min="0" data-max="2" data-default="1"></div>
+          <label>Mic Gain</label>
+        </div>
+        <div class="knob-cell">
+          <div class="knob" data-id="master" data-min="0" data-max="1.2" data-default="0.8"></div>
+          <label>Master</label>
+        </div>
+        <div class="knob-cell">
+          <div class="knob" data-id="auto_target" data-min="0.05" data-max="0.5" data-default="0.25"></div>
+          <label>Auto Target</label>
+        </div>
+        <div class="toggle-cell">
+          <button class="rune-btn" data-toggle="auto_mix">AUTO MIX</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Reverb -->
+    <section class="panel half">
+      <h2>🌀 Reverb 🌀</h2>
+      <div class="row">
+        <div class="knob-cell"><div class="knob" data-id="reverb_mix"  data-min="0" data-max="1" data-default="0.25"></div><label>Mix</label></div>
+        <div class="knob-cell"><div class="knob" data-id="reverb_size" data-min="0" data-max="1" data-default="0.7"></div><label>Size</label></div>
+        <div class="knob-cell"><div class="knob" data-id="reverb_damp" data-min="0" data-max="1" data-default="0.4"></div><label>Damp</label></div>
+      </div>
+    </section>
+
+    <!-- Delay -->
+    <section class="panel half">
+      <h2>🗡 Delay 🗡</h2>
+      <div class="row">
+        <div class="knob-cell"><div class="knob" data-id="delay_time" data-min="20"  data-max="1500" data-default="380"></div><label>Time (ms)</label></div>
+        <div class="knob-cell"><div class="knob" data-id="delay_fb"   data-min="0"   data-max="0.9"  data-default="0.45"></div><label>Feedback</label></div>
+        <div class="knob-cell"><div class="knob" data-id="delay_mix"  data-min="0"   data-max="1"    data-default="0.2"></div><label>Mix</label></div>
+      </div>
+    </section>
+
+    <!-- EQ -->
+    <section class="panel half">
+      <h2>🛡 Equaliser 🛡</h2>
+      <div class="row">
+        <div class="knob-cell"><div class="knob" data-id="eq_low"  data-min="-18" data-max="18" data-default="0"></div><label>Low (200Hz)</label></div>
+        <div class="knob-cell"><div class="knob" data-id="eq_mid"  data-min="-18" data-max="18" data-default="0"></div><label>Mid (1kHz)</label></div>
+        <div class="knob-cell"><div class="knob" data-id="eq_high" data-min="-18" data-max="18" data-default="0"></div><label>High (4kHz)</label></div>
+      </div>
+    </section>
+
+    <!-- Experiment freq -->
+    <section class="panel half">
+      <h2>✨ Experimental Tones ✨</h2>
+      <div class="row">
+        <div class="knob-cell"><div class="knob" data-id="exp_freq" data-min="20"  data-max="4000" data-default="220" data-curve="log"></div><label>Freq</label></div>
+        <div class="knob-cell"><div class="knob" data-id="exp_amp"  data-min="0"   data-max="0.5"  data-default="0"></div><label>Amp</label></div>
+      </div>
+      <div class="row">
+        <div class="wave-picker" id="wave-picker">
+          <button data-wave="0" class="wave-btn selected">∿</button>
+          <button data-wave="1" class="wave-btn">△</button>
+          <button data-wave="2" class="wave-btn">◢</button>
+          <button data-wave="3" class="wave-btn">⊓</button>
+          <button data-wave="4" class="wave-btn">≋</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quantum -->
+    <section class="panel half">
+      <h2>⚛ Quantum Circuit ⚛</h2>
+      <div class="row">
+        <div class="knob-cell"><div class="knob" data-id="q_amount" data-min="0" data-max="1" data-default="0.3"></div><label>Chaos</label></div>
+        <div class="knob-cell"><div class="knob" data-id="q_smooth" data-min="0" data-max="1" data-default="0.7"></div><label>Smoothing</label></div>
+        <div class="knob-cell"><div class="knob" data-id="auto_rate" data-min="0.02" data-max="3" data-default="0.15"></div><label>LFO Hz</label></div>
+        <div class="toggle-cell"><button class="rune-btn" data-toggle="automation">AUTOMATION</button></div>
+      </div>
+    </section>
+
+    <!-- Drum machine -->
+    <section class="panel full">
+      <h2>🥁 Drum Machine 🥁</h2>
+      <div class="row drum-controls">
+        <div class="knob-cell"><div class="knob" data-id="bpm" data-min="60" data-max="180" data-default="96"></div><label>BPM</label></div>
+        <div class="knob-cell"><div class="knob" data-id="drum_gain" data-min="0" data-max="1" data-default="0.7"></div><label>Gain</label></div>
+        <button class="rune-btn" data-toggle="drum">DRUMS ON</button>
+      </div>
+      <div class="drum-grid" id="drum-grid"></div>
+    </section>
+
+    <!-- Looper + Record -->
+    <section class="panel full">
+      <h2>🔁 Looper & Scribe 🔁</h2>
+      <div class="row">
+        <button class="rune-btn big" id="loop-rec">⏺ LOOP REC</button>
+        <button class="rune-btn" id="loop-stop">■ STOP</button>
+        <button class="rune-btn" id="loop-clear">✖ CLEAR</button>
+        <div class="knob-cell"><div class="knob" data-id="loop_gain" data-min="0" data-max="1" data-default="0.8"></div><label>Loop Gain</label></div>
+        <div class="loop-pos"><span id="loop-pos-bar"></span></div>
+      </div>
+      <div class="row">
+        <button class="rune-btn big rec" id="record-btn">⏺ RECORD</button>
+        <div id="loop-state-label">LOOPER: idle</div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>SolarMix runs on Pi 5 — Rust + NEON SIMD + 4-qubit modulator. <span id="ws-status">connecting…</span></footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

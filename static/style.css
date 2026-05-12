@@ -1,0 +1,309 @@
+/* SolarMix — Warcraft / arcane-tome RPG aesthetic.
+ * Heavy wooden frames, gold filigree, runed buttons, parchment background.
+ * Pure CSS — no images required.  Tested in Safari (iOS + macOS). */
+
+:root {
+  --gold-1: #d9b75b;
+  --gold-2: #b18a30;
+  --gold-3: #6a4a12;
+  --wood-1: #5a3a1c;
+  --wood-2: #3b240e;
+  --wood-3: #20140a;
+  --parch-1: #efddb3;
+  --parch-2: #d9c187;
+  --rune: #ffe9a6;
+  --blood: #a01818;
+  --emerald: #2f7a48;
+  --azure: #2a4f8a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: #1a1108;
+  font-family: -apple-system, "Iowan Old Style", Georgia, serif;
+  color: #2b1c0a;
+  -webkit-text-size-adjust: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+#tome {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px;
+  background:
+    radial-gradient(ellipse at top, rgba(255,210,120,0.07), transparent 60%),
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.04) 0 2px, transparent 2px 5px),
+    linear-gradient(180deg, var(--wood-1), var(--wood-2));
+  border: 6px solid var(--wood-3);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 0 0 4px var(--gold-3),
+    inset 0 0 0 6px var(--gold-2),
+    inset 0 0 0 8px var(--gold-3),
+    0 18px 50px rgba(0,0,0,0.7);
+  min-height: 95vh;
+}
+
+/* ========== banner ========== */
+.banner {
+  background: linear-gradient(180deg, #3b2410, #20140a);
+  border: 3px solid var(--gold-2);
+  border-radius: 14px;
+  box-shadow: inset 0 0 0 2px var(--gold-3), 0 6px 18px rgba(0,0,0,0.5);
+  padding: 12px 18px;
+  margin-bottom: 14px;
+}
+.banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.crest {
+  font-size: 36px;
+  color: var(--gold-1);
+  text-shadow: 0 0 12px rgba(255,200,90,0.7), 0 2px 0 #000;
+  width: 56px; height: 56px;
+  display: grid; place-items: center;
+  border: 3px solid var(--gold-2);
+  border-radius: 50%;
+  background: radial-gradient(circle, #5a3712, #20140a);
+}
+.banner h1 {
+  flex: 1;
+  margin: 0;
+  font-family: "Cinzel", "Trajan Pro", Georgia, serif;
+  font-size: 28px;
+  color: var(--gold-1);
+  letter-spacing: 2px;
+  text-shadow: 0 0 12px rgba(255,180,60,0.5), 0 2px 0 #000, 0 1px 0 var(--gold-3);
+}
+.banner h1 .sub {
+  display: block;
+  font-size: 13px;
+  color: var(--parch-2);
+  letter-spacing: 6px;
+  margin-top: 2px;
+}
+.meters { display: flex; gap: 10px; }
+.meter { width: 110px; }
+.meter label {
+  font-size: 11px; color: var(--gold-1); letter-spacing: 2px;
+}
+.meter .bar {
+  position: relative; height: 14px;
+  background: #100a04;
+  border: 2px solid var(--gold-3);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: inset 0 0 6px #000;
+}
+.meter .bar span {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+  background: linear-gradient(90deg, #2f7a48, #d9b75b 75%, #a01818);
+  transition: width 60ms linear;
+}
+
+/* ========== parchment grid ========== */
+.parchment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.panel {
+  background:
+    repeating-linear-gradient(0deg, rgba(80,40,10,0.04) 0 2px, transparent 2px 3px),
+    radial-gradient(ellipse at top left, #f3e3b5, var(--parch-1) 70%, var(--parch-2));
+  border: 3px solid var(--wood-3);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow:
+    inset 0 0 0 2px var(--gold-2),
+    inset 0 0 30px rgba(160,90,30,0.18),
+    0 4px 12px rgba(0,0,0,0.4);
+  position: relative;
+}
+.panel.full { grid-column: 1 / -1; }
+.panel.half { grid-column: span 1; }
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-family: "Cinzel", Georgia, serif;
+  letter-spacing: 3px;
+  font-size: 16px;
+  color: var(--wood-2);
+  text-align: center;
+  border-bottom: 2px solid var(--gold-3);
+  padding-bottom: 6px;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+/* ========== knobs ========== */
+.knob-cell {
+  display: flex; flex-direction: column; align-items: center;
+  width: 84px;
+}
+.knob-cell label {
+  font-size: 11px; letter-spacing: 1.5px;
+  color: var(--wood-2); margin-top: 4px;
+  text-transform: uppercase;
+}
+.knob {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 25%, #f4d27a 0%, #b88822 35%, #6a4a12 75%, #2b1d08 100%);
+  border: 3px solid var(--wood-3);
+  box-shadow:
+    inset 0 0 0 2px var(--gold-2),
+    inset 0 -8px 16px rgba(0,0,0,0.4),
+    inset 0 8px 12px rgba(255,230,160,0.3),
+    0 3px 6px rgba(0,0,0,0.5);
+  position: relative;
+  touch-action: none;
+  cursor: grab;
+}
+.knob::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 8%;
+  width: 4px; height: 28px;
+  background: linear-gradient(180deg, #fff5c0, #c08a20);
+  border-radius: 2px;
+  transform: translate(-50%, 0) rotate(0deg);
+  transform-origin: 50% 130%;
+  box-shadow: 0 0 6px rgba(255,200,80,0.8);
+}
+.knob.dragging { cursor: grabbing; }
+
+/* ========== rune buttons ========== */
+.rune-btn {
+  font-family: "Cinzel", Georgia, serif;
+  letter-spacing: 2px;
+  color: var(--rune);
+  background: linear-gradient(180deg, #4a2f12, #2b1a08);
+  border: 3px solid var(--wood-3);
+  box-shadow:
+    inset 0 0 0 2px var(--gold-2),
+    inset 0 0 12px rgba(0,0,0,0.5),
+    0 3px 0 #1a0d04,
+    0 6px 12px rgba(0,0,0,0.4);
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  text-shadow: 0 0 10px rgba(255,200,80,0.7), 0 1px 0 #000;
+  cursor: pointer;
+  transition: transform 60ms, box-shadow 60ms;
+}
+.rune-btn:active { transform: translateY(2px); box-shadow: inset 0 0 0 2px var(--gold-3), inset 0 0 12px rgba(0,0,0,0.7); }
+.rune-btn.on {
+  background: linear-gradient(180deg, #6a4912, #3a2308);
+  color: #fff8c0;
+  box-shadow:
+    inset 0 0 0 2px var(--gold-1),
+    inset 0 0 18px rgba(255,200,60,0.4),
+    0 0 18px rgba(255,180,60,0.6);
+}
+.rune-btn.big { font-size: 15px; padding: 12px 22px; }
+.rune-btn.rec { color: #ffb0a0; }
+.rune-btn.rec.on { background: linear-gradient(180deg, #7a1818, #3a0808); color: #ffeaea;
+  box-shadow: inset 0 0 0 2px var(--blood), inset 0 0 18px rgba(255,60,40,0.4), 0 0 18px rgba(200,40,40,0.6);}
+
+.toggle-cell { display: flex; align-items: center; }
+
+.wave-picker { display: flex; gap: 6px; }
+.wave-btn {
+  width: 40px; height: 40px;
+  font-size: 22px;
+  color: var(--rune);
+  background: linear-gradient(180deg, #3a2410, #20140a);
+  border: 2px solid var(--gold-3);
+  border-radius: 6px;
+  cursor: pointer;
+  text-shadow: 0 0 8px rgba(255,200,80,0.7);
+}
+.wave-btn.selected { background: linear-gradient(180deg, #6a4912, #3a2308); border-color: var(--gold-1);
+  box-shadow: 0 0 12px rgba(255,200,80,0.5);}
+
+/* ========== drum grid ========== */
+.drum-controls { margin-bottom: 8px; }
+.drum-grid {
+  display: grid;
+  grid-template-columns: 70px repeat(16, 1fr);
+  gap: 4px;
+  margin-top: 10px;
+}
+.drum-grid .voice-label {
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 11px; letter-spacing: 1.5px;
+  color: var(--wood-2);
+  display: grid; place-items: center;
+}
+.drum-grid .step {
+  aspect-ratio: 1 / 1;
+  background: linear-gradient(180deg, #1a1006, #0c0703);
+  border: 2px solid var(--wood-3);
+  box-shadow: inset 0 0 0 1px var(--gold-3), inset 0 0 6px rgba(0,0,0,0.6);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+.drum-grid .step.on {
+  background: radial-gradient(circle at 40% 35%, #ffe7a0, #c98920 60%, #6a4a12);
+  box-shadow: inset 0 0 0 1px var(--gold-1), 0 0 8px rgba(255,200,80,0.6);
+}
+.drum-grid .step.cur {
+  outline: 2px solid #ff5050;
+  outline-offset: -2px;
+}
+
+/* loop position */
+.loop-pos {
+  flex: 1; height: 14px; min-width: 200px;
+  background: #100a04;
+  border: 2px solid var(--gold-3);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+.loop-pos span {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: linear-gradient(180deg, #fff5c0, #c08a20);
+  box-shadow: 0 0 8px rgba(255,200,80,0.8);
+}
+#loop-state-label {
+  font-family: "Cinzel", Georgia, serif;
+  letter-spacing: 2px; color: var(--wood-2);
+}
+
+footer {
+  text-align: center;
+  padding: 12px;
+  color: var(--gold-1);
+  font-size: 12px;
+  letter-spacing: 1.5px;
+}
+#ws-status { margin-left: 14px; }
+
+/* small screens (Safari iOS) */
+@media (max-width: 800px) {
+  .parchment { grid-template-columns: 1fr; }
+  .banner h1 { font-size: 18px; }
+  .banner h1 .sub { font-size: 10px; letter-spacing: 3px; }
+  .drum-grid { grid-template-columns: 50px repeat(16, 1fr); }
+  .knob { width: 54px; height: 54px; }
+  .knob::after { height: 22px; }
+}
