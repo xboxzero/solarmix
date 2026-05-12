@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>solarmix</title>
+<style>
+  :root {
+    --ink: #d7f9ee;
+    --dim: #6cae9a;
+    --hot: #ff4fd8;
+    --warn: #ffd84f;
+    --bg: #04070a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 12px/1.35 ui-monospace, "JetBrains Mono", Menlo, monospace; overflow: hidden; }
+  #cam {
+    position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
+    object-fit: cover; opacity: 0.85; filter: contrast(1.1) saturate(1.1);
+    transform-origin: 50% 50%;
+    pointer-events: none;
+    image-rendering: pixelated;
+  }
+  #scene {
+    position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
+    pointer-events: none;
+  }
+  #grid {
+    position: fixed; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(108,174,154,0.06) 0 1px, transparent 1px 32px),
+      repeating-linear-gradient(90deg, rgba(108,174,154,0.06) 0 1px, transparent 1px 32px);
+    mix-blend-mode: screen;
+  }
+  .panel {
+    position: fixed; padding: 10px 12px; min-width: 200px;
+    background: rgba(4,7,10,0.55); border: 1px solid rgba(108,174,154,0.45);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    color: var(--ink);
+  }
+  .panel h2 { margin: 0 0 6px 0; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+  .panel .row { display: flex; justify-content: space-between; gap: 12px; }
+  .panel .v { color: var(--ink); }
+  .panel select, .panel button {
+    background: transparent; border: 1px solid rgba(108,174,154,0.45);
+    color: var(--ink); padding: 3px 6px; font: inherit; outline: none;
+  }
+  .panel button:hover, .panel select:hover { border-color: var(--hot); }
+  .panel.tl { left: 12px; top: 12px; }
+  .panel.tr { right: 12px; top: 12px; }
+  .panel.bl { left: 12px; bottom: 12px; }
+  .panel.br { right: 12px; bottom: 12px; }
+  .meter { position: relative; height: 6px; background: rgba(108,174,154,0.15); margin: 4px 0; }
+  .meter > i { display: block; height: 100%; background: linear-gradient(90deg, var(--dim), var(--hot)); width: 0%; }
+  .qbar { display: inline-block; width: 18px; height: 28px; margin-right: 3px; background: rgba(108,174,154,0.15); vertical-align: bottom; position: relative; }
+  .qbar > i { position: absolute; left: 0; bottom: 0; width: 100%; background: var(--warn); }
+  .qlabel { display: inline-block; width: 18px; text-align: center; font-size: 9px; margin-right: 3px; color: var(--dim); }
+  #boot {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(4,7,10,0.85); z-index: 99; gap: 14px;
+  }
+  #boot h1 { font-size: 36px; letter-spacing: 0.18em; margin: 0; color: var(--hot); text-shadow: 0 0 24px var(--hot); }
+  #boot p { max-width: 540px; text-align: center; color: var(--dim); }
+  #boot button { font-size: 14px; padding: 10px 22px; background: var(--hot); color: #04070a; border: none; cursor: pointer; letter-spacing: 0.1em; }
+  .pulse { animation: pulse 1.2s linear infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dim); margin-right: 4px; vertical-align: middle; }
+  .dot.live { background: var(--hot); box-shadow: 0 0 8px var(--hot); }
+  .dot.warn { background: var(--warn); }
+  .hand-ring {
+    position: fixed; width: 90px; height: 90px; border-radius: 50%;
+    border: 2px solid var(--hot); pointer-events: none;
+    transform: translate(-50%, -50%); z-index: 5;
+    box-shadow: 0 0 30px var(--hot);
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+  <img id="cam" alt="" />
+  <canvas id="scene"></canvas>
+  <div id="grid"></div>
+  <div class="hand-ring" id="ring"></div>
+
+  <div class="panel tl">
+    <h2><span class="dot" id="leapDot"></span>leap / hand</h2>
+    <div class="row"><span>x</span><span class="v" id="hx">—</span></div>
+    <div class="row"><span>y / master</span><span class="v" id="hy">—</span></div>
+    <div class="row"><span>z / feedback</span><span class="v" id="hz">—</span></div>
+    <div class="row"><span>pinch</span><span class="v" id="hp">—</span></div>
+    <div class="row"><span>source</span><span class="v" id="hsrc">mouse</span></div>
+  </div>
+
+  <div class="panel tr">
+    <h2>scale / meter</h2>
+    <div class="row"><span>scale</span>
+      <select id="scaleSel"></select>
+    </div>
+    <div class="row"><span>root</span>
+      <select id="rootSel"></select>
+    </div>
+    <div class="row"><span>folk meter</span>
+      <select id="meterSel"></select>
+    </div>
+    <div class="row"><span>noise color</span>
+      <select id="noiseSel"></select>
+    </div>
+    <div class="row"><span>tempo bpm</span><span class="v" id="bpm">96</span></div>
+  </div>
+
+  <div class="panel bl">
+    <h2>4ch mixer</h2>
+    <div class="row"><span>cam-osc</span><span class="v" id="g0">0.0</span></div>
+    <div class="meter"><i id="m0"></i></div>
+    <div class="row"><span>mic / autotune</span><span class="v" id="g1">0.0</span></div>
+    <div class="meter"><i id="m1"></i></div>
+    <div class="row"><span>noise</span><span class="v" id="g2">0.0</span></div>
+    <div class="meter"><i id="m2"></i></div>
+    <div class="row"><span>feedback rhythm</span><span class="v" id="g3">0.0</span></div>
+    <div class="meter"><i id="m3"></i></div>
+    <div class="row"><span><b>master</b></span><span class="v" id="gM">0.0</span></div>
+    <div class="meter"><i id="mM"></i></div>
+  </div>
+
+  <div class="panel br">
+    <h2>quantum router (4q)</h2>
+    <div id="qbars"></div>
+    <div class="row"><span>last gate</span><span class="v" id="qg">—</span></div>
+    <div class="row"><span>route perm</span><span class="v" id="qperm">[0,1,2,3]</span></div>
+    <div class="row"><span>entropy</span><span class="v" id="qent">0.0</span></div>
+    <div style="margin-top:6px;">
+      <button id="qstep">step circuit</button>
+    </div>
+  </div>
+
+  <div id="boot">
+    <h1>solarmix</h1>
+    <p>feedback rhythm machine · leap-driven · pi-cam visual · quantum-routed 4-ch · folk meter / scale-locked / autotune-lite</p>
+    <p style="font-size:11px;">Mic permission required. Click to begin (the browser blocks audio until you do).</p>
+    <button id="bootBtn">begin</button>
+    <p id="bootMsg" style="font-size:10px; color:var(--warn);"></p>
+  </div>
+
+<script type="module">
+// ===== Three.js (ESM CDN) =====
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+// ============================================================================
+// Solarmix — feedback rhythm machine.
+// One big module on purpose: this is an art piece, not a library.
+// ----------------------------------------------------------------------------
+//   Layers (top to bottom of audio graph):
+//     [0] cam-osc      : OscillatorNode driven by camera centroid + scale-locked
+//     [1] mic/autotune : mic -> envelope -> drives sine at scale-snapped pitch
+//     [2] noise        : palette of colored noises selected by quantum state
+//     [3] feedback rhy : impulses into a feedback delay network, fired by folk
+//                        meter grids (no drum samples — purely tonal feedback)
+//   Quantum router : 4-qubit unitary sim. On each circuit step it permutes the
+//                    4 channels into the master bus and re-samples noise color.
+//   Leap           : WebSocket /leap with mouse fallback. Master vol = hand Y.
+// ============================================================================
+
+// ---------- Scales ----------
+const SCALES = {
+  chromatic:   [0,1,2,3,4,5,6,7,8,9,10,11],
+  major:       [0,2,4,5,7,9,11],
+  minor:       [0,2,3,5,7,8,10],
+  dorian:      [0,2,3,5,7,9,10],
+  phrygian:    [0,1,3,5,7,8,10],
+  lydian:      [0,2,4,6,7,9,11],
+  mixolydian:  [0,2,4,5,7,9,10],
+  pentMajor:   [0,2,4,7,9],
+  pentMinor:   [0,3,5,7,10],
+  blues:       [0,3,5,6,7,10],
+  ragaYaman:   [0,2,4,6,7,9,11],
+  ragaBhairavi:[0,1,3,5,7,8,10],
+};
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+// Snap a MIDI note to the nearest in-scale note (relative to root midi class).
+function snapMidi(midi, scaleName, rootClass) {
+  const scale = SCALES[scaleName] || SCALES.major;
+  const rel = ((midi - rootClass) % 12 + 12) % 12;
+  let best = scale[0], bestDist = 99;
+  for (const s of scale) {
+    const d = Math.min(Math.abs(rel - s), 12 - Math.abs(rel - s));
+    if (d < bestDist) { bestDist = d; best = s; }
+  }
+  let snapped = midi - rel + best;
+  if (snapped < 12) snapped += 12;
+  return snapped;
+}
+const midiToFreq = m => 440 * Math.pow(2, (m - 69) / 12);
+
+// ---------- Folk meter patterns (each cell = a sixteenth-or-twelfth; 1 = hit) ----------
+// In a feedback rhythm machine these aren't drum hits — each '1' fires an
+// impulse into the FDN tuned to the current scale degree.
+const METERS = {
+  '6/8 jig':       { len: 12, hits: [1,0,0,1,0,0,1,0,0,1,0,0] },
+  '12/8 swing':    { len: 12, hits: [1,0,0,1,0,1,1,0,0,1,0,1] },
+  'son 3-2':       { len: 16, hits: [1,0,0,1,0,0,1,0,0,0,1,0,1,0,0,0] },
+  'rumba':         { len: 16, hits: [1,0,0,1,0,0,0,1,0,0,1,0,1,0,0,0] },
+  'samba':         { len: 16, hits: [1,0,0,1,1,0,1,0,0,1,1,0,1,0,1,0] },
+  'kpanlogo':      { len: 12, hits: [1,0,1,1,0,1,0,1,1,0,1,0] },
+  'tarantella':    { len: 12, hits: [1,0,1,0,1,0,1,1,0,1,0,1] },
+  'bourrée 3/4':   { len: 12, hits: [1,0,0,0,1,0,1,0,0,0,1,0] },
+  'breton an dro': { len: 16, hits: [1,0,1,0,1,0,1,1,0,1,0,1,1,0,1,0] },
+  'odd 7/8':       { len: 14, hits: [1,0,1,0,1,0,0,1,0,1,0,1,0,0] },
+};
+
+// ---------- Noise palette ----------
+// White / pink / brown / blue / violet noise buffers, generated once.
+const NOISE_COLORS = ['white','pink','brown','blue','violet'];
+function makeNoiseBuffer(ctx, color, seconds = 4) {
+  const n = ctx.sampleRate * seconds;
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  if (color === 'white') {
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  } else if (color === 'pink') {
+    // Voss-McCartney
+    let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+    for (let i = 0; i < n; i++) {
+      const w = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + w * 0.0555179;
+      b1 = 0.99332 * b1 + w * 0.0750759;
+      b2 = 0.96900 * b2 + w * 0.1538520;
+      b3 = 0.86650 * b3 + w * 0.3104856;
+      b4 = 0.55000 * b4 + w * 0.5329522;
+      b5 = -0.7616 * b5 - w * 0.0168980;
+      d[i] = (b0+b1+b2+b3+b4+b5+b6+w*0.5362) * 0.11;
+      b6 = w * 0.115926;
+    }
+  } else if (color === 'brown') {
+    let last = 0;
+    for (let i = 0; i < n; i++) {
+      const w = Math.random() * 2 - 1;
+      last = (last + 0.02 * w) / 1.02;
+      d[i] = last * 3.5;
+    }
+  } else if (color === 'blue') {
+    let prev = 0;
+    for (let i = 0; i < n; i++) {
+      const w = Math.random() * 2 - 1;
+      d[i] = (w - prev) * 0.5; prev = w;
+    }
+  } else if (color === 'violet') {
+    let prev = 0, prev2 = 0;
+    for (let i = 0; i < n; i++) {
+      const w = Math.random() * 2 - 1;
+      d[i] = (w - 2*prev + prev2) * 0.25; prev2 = prev; prev = w;
+    }
+  }
+  return buf;
+}
+
+// ---------- 4-qubit quantum router ----------
+// 16 complex amplitudes. Pure simulation, no library.
+class Qubits4 {
+  constructor() {
+    this.re = new Float64Array(16);
+    this.im = new Float64Array(16);
+    this.re[0] = 1; // |0000>
+    this.lastGate = '·';
+  }
+  // Apply single-qubit gate (2x2 with re_/im_ entries) to qubit `q` (0..3).
+  applySingle(q, g) {
+    const stride = 1 << q;
+    for (let i = 0; i < 16; i++) {
+      if ((i & stride) !== 0) continue;
+      const j = i | stride;
+      const ar = this.re[i], ai = this.im[i];
+      const br = this.re[j], bi = this.im[j];
+      // |i> -> g00*a + g01*b ; |j> -> g10*a + g11*b
+      this.re[i] = g.r00*ar - g.i00*ai + g.r01*br - g.i01*bi;
+      this.im[i] = g.r00*ai + g.i00*ar + g.r01*bi + g.i01*br;
+      this.re[j] = g.r10*ar - g.i10*ai + g.r11*br - g.i11*bi;
+      this.im[j] = g.r10*ai + g.i10*ar + g.r11*bi + g.i11*br;
+    }
+  }
+  cnot(ctrl, tgt) {
+    const cm = 1 << ctrl, tm = 1 << tgt;
+    for (let i = 0; i < 16; i++) {
+      if ((i & cm) && !(i & tm)) {
+        const j = i | tm;
+        const ar = this.re[i], ai = this.im[i];
+        this.re[i] = this.re[j]; this.im[i] = this.im[j];
+        this.re[j] = ar; this.im[j] = ai;
+      }
+    }
+    this.lastGate = `CNOT(${ctrl},${tgt})`;
+  }
+  hadamard(q) {
+    const s = 1 / Math.SQRT2;
+    this.applySingle(q, { r00:s,i00:0, r01:s,i01:0, r10:s,i10:0, r11:-s,i11:0 });
+    this.lastGate = `H(${q})`;
+  }
+  // Rotation around Y by theta (good for biased mixing)
+  ry(q, theta) {
+    const c = Math.cos(theta/2), s = Math.sin(theta/2);
+    this.applySingle(q, { r00:c,i00:0, r01:-s,i01:0, r10:s,i10:0, r11:c,i11:0 });
+    this.lastGate = `Ry(${q},${theta.toFixed(2)})`;
+  }
+  probs() {
+    const p = new Float64Array(16);
+    for (let i = 0; i < 16; i++) p[i] = this.re[i]*this.re[i] + this.im[i]*this.im[i];
+    return p;
+  }
+  marginal(q) {
+    // P(qubit q = 1)
+    let p = 0;
+    const m = 1 << q;
+    const pr = this.probs();
+    for (let i = 0; i < 16; i++) if (i & m) p += pr[i];
+    return p;
+  }
+  measure() {
+    const p = this.probs();
+    let r = Math.random(), acc = 0;
+    for (let i = 0; i < 16; i++) {
+      acc += p[i];
+      if (r <= acc) {
+        // Collapse to basis state |i>.
+        this.re.fill(0); this.im.fill(0);
+        this.re[i] = 1;
+        return i;
+      }
+    }
+    return 0;
+  }
+  entropy() {
+    const p = this.probs();
+    let h = 0;
+    for (let i = 0; i < 16; i++) if (p[i] > 1e-12) h -= p[i] * Math.log2(p[i]);
+    return h;
+  }
+}
+
+// ============================================================================
+// Boot — needs user gesture.
+// ============================================================================
+const bootEl = document.getElementById('boot');
+const bootMsg = document.getElementById('bootMsg');
+document.getElementById('bootBtn').addEventListener('click', () => {
+  bootEl.style.display = 'none';
+  start().catch(e => {
+    console.error(e);
+    bootEl.style.display = 'flex';
+    bootMsg.textContent = 'fail: ' + e.message;
+  });
+});
+
+// Populate selects up-front (works before boot).
+{
+  const scaleSel = document.getElementById('scaleSel');
+  Object.keys(SCALES).forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k; scaleSel.appendChild(o); });
+  scaleSel.value = 'pentMinor';
+  const rootSel = document.getElementById('rootSel');
+  NOTE_NAMES.forEach((n,i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; rootSel.appendChild(o); });
+  rootSel.value = 2; // D
+  const meterSel = document.getElementById('meterSel');
+  Object.keys(METERS).forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k; meterSel.appendChild(o); });
+  meterSel.value = '6/8 jig';
+  const noiseSel = document.getElementById('noiseSel');
+  NOISE_COLORS.forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k; noiseSel.appendChild(o); });
+  noiseSel.value = 'pink';
+  // Quantum bars
+  const qbars = document.getElementById('qbars');
+  for (let q = 0; q < 4; q++) {
+    const b = document.createElement('span'); b.className = 'qbar';
+    const i = document.createElement('i'); i.id = 'qb' + q; b.appendChild(i);
+    qbars.appendChild(b);
+  }
+  qbars.appendChild(document.createElement('br'));
+  for (let q = 0; q < 4; q++) {
+    const l = document.createElement('span'); l.className = 'qlabel'; l.textContent = 'q' + q;
+    qbars.appendChild(l);
+  }
+}
+
+// ============================================================================
+async function start() {
+  // ===== Mic =====
+  let micStream;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) {
+    throw new Error('mic denied: ' + e.message);
+  }
+
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+
+  // ===== Camera image =====
+  const camEl = document.getElementById('cam');
+  camEl.src = '/camera.mjpeg';
+  camEl.onerror = () => { /* page works without camera */ };
+  // Hidden canvas to sample image centroid -> drives cam-osc pitch
+  const camCanvas = document.createElement('canvas');
+  camCanvas.width = 64; camCanvas.height = 48;
+  const camCtx = camCanvas.getContext('2d', { willReadFrequently: true });
+
+  // ===== Master =====
+  const master = ctx.createGain();
+  master.gain.value = 0.5;
+  const masterAnalyser = ctx.createAnalyser();
+  masterAnalyser.fftSize = 2048;
+  master.connect(masterAnalyser);
+  masterAnalyser.connect(ctx.destination);
+
+  // ===== Channel busses =====
+  const ch = [];
+  for (let i = 0; i < 4; i++) {
+    const g = ctx.createGain();
+    g.gain.value = 0.0;
+    const a = ctx.createAnalyser();
+    a.fftSize = 256;
+    g.connect(a);
+    a.connect(master);
+    ch.push({ gain: g, analyser: a, value: 0 });
+  }
+
+  // ===== Ch0 — cam-osc =====
+  const camOsc = ctx.createOscillator();
+  camOsc.type = 'sawtooth';
+  const camOscGain = ctx.createGain();
+  camOscGain.gain.value = 0.15;
+  // Subtle resonant filter shaped by current scale degree
+  const camFilt = ctx.createBiquadFilter();
+  camFilt.type = 'bandpass';
+  camFilt.Q.value = 6;
+  camFilt.frequency.value = 600;
+  camOsc.connect(camFilt);
+  camFilt.connect(camOscGain);
+  camOscGain.connect(ch[0].gain);
+  camOsc.frequency.value = midiToFreq(57);
+  camOsc.start();
+
+  // ===== Ch1 — mic + autotune-lite =====
+  const micSrc = ctx.createMediaStreamSource(micStream);
+  // envelope follower: square -> 1-pole LPF via WaveShaper isn't ideal, use AnalyserNode polling.
+  const micAnalyser = ctx.createAnalyser();
+  micAnalyser.fftSize = 2048;
+  micAnalyser.smoothingTimeConstant = 0.1;
+  micSrc.connect(micAnalyser);
+  // dry mic at low level
+  const micDryGain = ctx.createGain();
+  micDryGain.gain.value = 0.15;
+  micSrc.connect(micDryGain);
+  micDryGain.connect(ch[1].gain);
+  // scale-snapped voice: sine osc, amplitude = mic env, freq = snapped detected pitch
+  const tuneOsc = ctx.createOscillator();
+  tuneOsc.type = 'sine';
+  const tuneGain = ctx.createGain();
+  tuneGain.gain.value = 0;
+  tuneOsc.connect(tuneGain);
+  tuneGain.connect(ch[1].gain);
+  tuneOsc.start();
+
+  // ===== Ch2 — noise palette =====
+  const noiseBufs = {};
+  for (const c of NOISE_COLORS) noiseBufs[c] = makeNoiseBuffer(ctx, c);
+  let noiseNode = null;
+  function startNoise(color) {
+    if (noiseNode) { try { noiseNode.stop(); } catch {} }
+    const n = ctx.createBufferSource();
+    n.buffer = noiseBufs[color];
+    n.loop = true;
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'lowpass';
+    filt.frequency.value = 4000;
+    filt.Q.value = 0.7;
+    n.connect(filt);
+    filt.connect(ch[2].gain);
+    n.start();
+    noiseNode = n;
+    noiseNode._filt = filt;
+  }
+  startNoise('pink');
+
+  // ===== Ch3 — feedback rhythm (FDN) =====
+  // 4-line feedback delay network. Cross-feedback matrix is the Hadamard pattern
+  // (a feedback rhythm machine is literally an FDN excited by clave grids).
+  const FDN_N = 4;
+  const fdnInput = ctx.createGain();
+  const fdnDelays = [];
+  const fdnFeed = [];
+  const fdnSumPerLine = [];
+  for (let i = 0; i < FDN_N; i++) {
+    const d = ctx.createDelay(2.0);
+    d.delayTime.value = 0.12 + i * 0.07;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.55;
+    const sum = ctx.createGain();
+    fdnInput.connect(sum); // each line gets the input
+    d.connect(fb);
+    sum.connect(d);
+    fdnDelays.push(d);
+    fdnFeed.push(fb);
+    fdnSumPerLine.push(sum);
+  }
+  // Hadamard 4x4 / 2 cross-feedback
+  const H4 = [
+    [ 1, 1, 1, 1],
+    [ 1,-1, 1,-1],
+    [ 1, 1,-1,-1],
+    [ 1,-1,-1, 1],
+  ];
+  for (let i = 0; i < FDN_N; i++) {
+    for (let j = 0; j < FDN_N; j++) {
+      const g = ctx.createGain();
+      g.gain.value = H4[i][j] * 0.5; // /2 for energy preservation
+      fdnFeed[j].connect(g);
+      g.connect(fdnSumPerLine[i]);
+    }
+  }
+  // Output = sum of all lines
+  const fdnOut = ctx.createGain();
+  fdnOut.gain.value = 0.45;
+  for (const d of fdnDelays) d.connect(fdnOut);
+  // shimmer high-shelf so feedback bursts read as rhythmic 'bells'
+  const fdnShape = ctx.createBiquadFilter();
+  fdnShape.type = 'peaking';
+  fdnShape.frequency.value = 2400;
+  fdnShape.Q.value = 0.8;
+  fdnShape.gain.value = 6;
+  fdnOut.connect(fdnShape);
+  fdnShape.connect(ch[3].gain);
+
+  // Impulse generator: short tonal blip into FDN at scale-degree pitch
+  function fireImpulse(midi, vel) {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = midiToFreq(midi);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(vel * 0.6, now + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+    osc.connect(g);
+    g.connect(fdnInput);
+    osc.start(now);
+    osc.stop(now + 0.06);
+  }
+
+  // ===== Quantum router =====
+  const qubits = new Qubits4();
+  let routePerm = [0,1,2,3];
+  function stepCircuit(handX, handZ) {
+    // Use hand state to bias gates
+    const theta = (handX || Math.random()) * Math.PI;
+    qubits.hadamard(Math.floor(Math.random() * 4));
+    qubits.ry(Math.floor(Math.random() * 4), theta);
+    const c = Math.floor(Math.random() * 4);
+    let t = Math.floor(Math.random() * 4); if (t === c) t = (t + 1) % 4;
+    qubits.cnot(c, t);
+    // Measure once every few steps to permute routing
+    if (Math.random() < 0.4) {
+      const m = qubits.measure();
+      // m is a 4-bit; map to permutation via index into a small perm table
+      const PERMS = [
+        [0,1,2,3],[0,1,3,2],[0,2,1,3],[0,2,3,1],[0,3,1,2],[0,3,2,1],
+        [1,0,2,3],[1,0,3,2],[1,2,0,3],[1,2,3,0],[1,3,0,2],[1,3,2,0],
+        [2,0,1,3],[2,1,0,3],[2,3,0,1],[3,2,1,0],
+      ];
+      routePerm = PERMS[m % PERMS.length];
+      // Re-pick noise color biased by qubit-0 marginal (use lastGate=measure)
+      const colorIdx = m % NOISE_COLORS.length;
+      const color = NOISE_COLORS[colorIdx];
+      document.getElementById('noiseSel').value = color;
+      startNoise(color);
+    }
+  }
+  document.getElementById('qstep').addEventListener('click', () => stepCircuit());
+
+  // ===== Three.js oscillator-lightning =====
+  const sceneCanvas = document.getElementById('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+  function resize() {
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  }
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 6);
+
+  // Build a wireframe torus knot — that's our "3D model" that becomes an
+  // oscillator-wave-lightning when driven by audio.
+  const knotGeom = new THREE.TorusKnotGeometry(1.4, 0.18, 200, 18, 2, 3);
+  const knotMat = new THREE.LineBasicMaterial({ color: 0xff4fd8, transparent: true, opacity: 0.55 });
+  const knotWire = new THREE.LineSegments(new THREE.WireframeGeometry(knotGeom), knotMat);
+  scene.add(knotWire);
+
+  // Lightning trace — a BufferGeometry of N points that we deform every frame.
+  const TRACE_N = 512;
+  const tracePos = new Float32Array(TRACE_N * 3);
+  const traceGeo = new THREE.BufferGeometry();
+  traceGeo.setAttribute('position', new THREE.BufferAttribute(tracePos, 3));
+  const traceMat = new THREE.LineBasicMaterial({ color: 0xd7f9ee, transparent: true, opacity: 0.9 });
+  const traceLine = new THREE.Line(traceGeo, traceMat);
+  scene.add(traceLine);
+
+  // Branch bolts — sparse lightning ribs that fire on impulses.
+  const BOLT_MAX = 8;
+  const bolts = [];
+  for (let i = 0; i < BOLT_MAX; i++) {
+    const pos = new Float32Array(2 * 3);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const m = new THREE.LineBasicMaterial({ color: 0xffd84f, transparent: true, opacity: 0 });
+    const l = new THREE.Line(g, m);
+    scene.add(l);
+    bolts.push({ line: l, pos, mat: m, life: 0 });
+  }
+  function fireBolt(theta) {
+    const b = bolts.find(b => b.life <= 0);
+    if (!b) return;
+    const r1 = 1.5 + Math.random();
+    const r2 = 2.5 + Math.random() * 2;
+    b.pos[0] = Math.cos(theta) * r1;
+    b.pos[1] = Math.sin(theta) * r1;
+    b.pos[2] = (Math.random() - 0.5) * 1.5;
+    b.pos[3] = Math.cos(theta + (Math.random() - 0.5)) * r2;
+    b.pos[4] = Math.sin(theta + (Math.random() - 0.5)) * r2;
+    b.pos[5] = (Math.random() - 0.5) * 2.5;
+    b.line.geometry.attributes.position.needsUpdate = true;
+    b.life = 1;
+    b.mat.opacity = 1;
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ===== Leap WS or mouse =====
+  const leapDot = document.getElementById('leapDot');
+  const ring = document.getElementById('ring');
+  let hand = { x: 0.5, y: 0.5, z: 0.5, pinch: 0, src: 'mouse', t: 0 };
+  let lastLeapT = 0;
+  function setSrc(src) { hand.src = src; document.getElementById('hsrc').textContent = src; leapDot.classList.toggle('live', src === 'leap'); }
+  function connectLeap() {
+    try {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/leap`);
+      ws.addEventListener('message', ev => {
+        let f;
+        try { f = JSON.parse(ev.data); } catch { return; }
+        if (!f || !f.hands || !f.hands.length) return;
+        const h = f.hands[0];
+        // Expect position normalized -1..1 in X/Z, 0..1 in Y (height above device).
+        const px = (h.position?.[0] ?? 0) * 0.5 + 0.5;
+        const py = Math.min(1, Math.max(0, (h.position?.[1] ?? 0)));
+        const pz = (h.position?.[2] ?? 0) * 0.5 + 0.5;
+        hand.x = px; hand.y = py; hand.z = pz;
+        hand.pinch = h.pinch ?? 0;
+        hand.t = performance.now();
+        lastLeapT = hand.t;
+        setSrc('leap');
+      });
+      ws.addEventListener('close', () => setTimeout(connectLeap, 2000));
+      ws.addEventListener('error', () => ws.close());
+    } catch (e) { /* fallback handles it */ }
+  }
+  connectLeap();
+  window.addEventListener('mousemove', e => {
+    if (performance.now() - lastLeapT < 1500) return;
+    hand.x = e.clientX / window.innerWidth;
+    hand.y = 1 - e.clientY / window.innerHeight;
+    hand.z = 0.5 + 0.3 * Math.sin(performance.now() * 0.001);
+    setSrc('mouse');
+  });
+  window.addEventListener('mousedown', () => { if (hand.src === 'mouse') hand.pinch = 1; });
+  window.addEventListener('mouseup',   () => { if (hand.src === 'mouse') hand.pinch = 0; });
+
+  // ===== UI bindings =====
+  const ui = {
+    hx: document.getElementById('hx'), hy: document.getElementById('hy'),
+    hz: document.getElementById('hz'), hp: document.getElementById('hp'),
+    bpm: document.getElementById('bpm'),
+    qg: document.getElementById('qg'), qperm: document.getElementById('qperm'), qent: document.getElementById('qent'),
+    qb: [0,1,2,3].map(i => document.getElementById('qb'+i)),
+    m: [0,1,2,3].map(i => document.getElementById('m'+i)),
+    g: [0,1,2,3].map(i => document.getElementById('g'+i)),
+    mM: document.getElementById('mM'),
+    gM: document.getElementById('gM'),
+  };
+  let scaleName = 'pentMinor', rootClass = 2, meterName = '6/8 jig', noiseColor = 'pink';
+  document.getElementById('scaleSel').addEventListener('change', e => scaleName = e.target.value);
+  document.getElementById('rootSel').addEventListener('change', e => rootClass = +e.target.value);
+  document.getElementById('meterSel').addEventListener('change', e => meterName = e.target.value);
+  document.getElementById('noiseSel').addEventListener('change', e => { noiseColor = e.target.value; startNoise(noiseColor); });
+
+  // ===== Pitch detection (autocorrelation, classic) =====
+  const micTime = new Float32Array(micAnalyser.fftSize);
+  function detectPitchHz() {
+    micAnalyser.getFloatTimeDomainData(micTime);
+    let rms = 0;
+    for (let i = 0; i < micTime.length; i++) rms += micTime[i] * micTime[i];
+    rms = Math.sqrt(rms / micTime.length);
+    if (rms < 0.01) return { hz: 0, rms };
+    const sr = ctx.sampleRate;
+    const minLag = Math.floor(sr / 800);
+    const maxLag = Math.floor(sr / 70);
+    let bestLag = -1, bestCorr = 0;
+    for (let lag = minLag; lag < maxLag; lag++) {
+      let c = 0;
+      for (let i = 0; i < micTime.length - lag; i++) c += micTime[i] * micTime[i + lag];
+      if (c > bestCorr) { bestCorr = c; bestLag = lag; }
+    }
+    if (bestLag <= 0 || bestCorr < 0.6 * micTime.length * rms * rms) return { hz: 0, rms };
+    return { hz: sr / bestLag, rms };
+  }
+  const hzToMidi = hz => hz > 0 ? Math.round(69 + 12 * Math.log2(hz / 440)) : 0;
+
+  // ===== Rhythm clock =====
+  let stepIdx = 0;
+  let lastStepT = ctx.currentTime;
+  // tempo derived from second hand axis (z) if present; we use folk-natural 80-140 bpm
+  function currentBpm() {
+    return Math.round(80 + hand.x * 60);
+  }
+  function stepLenSec() {
+    const m = METERS[meterName];
+    // Each cell is a 12th or 16th, depending on len. bpm refers to quarter notes.
+    const quarter = 60 / currentBpm();
+    return quarter * (m.len === 12 ? (1/3) : (1/4));
+  }
+
+  // ===== Frequency-driven dimension warp on the camera image =====
+  const masterTime = new Float32Array(masterAnalyser.fftSize);
+  const masterFreq = new Uint8Array(masterAnalyser.frequencyBinCount);
+
+  // ===== Periodic quantum step =====
+  let lastQT = 0;
+  setInterval(() => { stepCircuit(hand.x, hand.z); }, 1800);
+
+  // ===== Sample camera centroid -> drive cam-osc pitch =====
+  function sampleCamera() {
+    if (!camEl.complete || camEl.naturalWidth === 0) return null;
+    try {
+      camCtx.drawImage(camEl, 0, 0, camCanvas.width, camCanvas.height);
+      const id = camCtx.getImageData(0, 0, camCanvas.width, camCanvas.height).data;
+      let sumX = 0, sumY = 0, sumW = 0, sumBright = 0;
+      for (let y = 0; y < camCanvas.height; y++) {
+        for (let x = 0; x < camCanvas.width; x++) {
+          const i = (y * camCanvas.width + x) * 4;
+          const b = (id[i] + id[i+1] + id[i+2]) / 3;
+          sumX += x * b; sumY += y * b; sumW += b; sumBright += b;
+        }
+      }
+      if (sumW === 0) return null;
+      return {
+        cx: sumX / sumW / camCanvas.width,
+        cy: sumY / sumW / camCanvas.height,
+        bright: sumBright / (camCanvas.width * camCanvas.height * 255),
+      };
+    } catch { return null; }
+  }
+
+  // ===== Animation / scheduler loop =====
+  function loop(t) {
+    requestAnimationFrame(loop);
+
+    // ---- Leap timeout -> mouse fallback ----
+    if (performance.now() - lastLeapT > 1500 && hand.src !== 'mouse') setSrc('mouse');
+
+    // ---- Hand HUD ----
+    ui.hx.textContent = hand.x.toFixed(2);
+    ui.hy.textContent = hand.y.toFixed(2);
+    ui.hz.textContent = hand.z.toFixed(2);
+    ui.hp.textContent = hand.pinch.toFixed(2);
+    ring.style.left = (hand.x * 100) + '%';
+    ring.style.top  = ((1 - hand.y) * 100) + '%';
+    ring.style.width = ring.style.height = (40 + hand.pinch * 80) + 'px';
+    ring.style.borderColor = hand.pinch > 0.5 ? 'var(--warn)' : 'var(--hot)';
+
+    // ---- Master volume from hand Y ----
+    const masterTarget = 0.05 + hand.y * 0.95;
+    master.gain.setTargetAtTime(masterTarget, ctx.currentTime, 0.05);
+
+    // ---- Channel gains shaped by quantum routing + pinch ----
+    // routePerm tells which channel gets boosted to which "slot"
+    const base = [0.55, 0.50, 0.35, 0.65];
+    for (let i = 0; i < 4; i++) {
+      const slot = routePerm.indexOf(i);
+      const route = 0.55 + 0.35 * (slot / 3);
+      const g = base[i] * route * (0.4 + 0.6 * masterTarget);
+      ch[i].gain.gain.setTargetAtTime(g, ctx.currentTime, 0.08);
+      ch[i].value = g;
+    }
+    // Feedback channel response to hand Z
+    const fbAmt = 0.30 + 0.65 * hand.z;
+    for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, ctx.currentTime, 0.1);
+
+    // ---- Cam-osc pitch from image centroid + scale snap ----
+    const cam = sampleCamera();
+    if (cam) {
+      const midiRaw = 40 + Math.floor(cam.cx * 36); // 3 octaves across X
+      const midi = snapMidi(midiRaw, scaleName, rootClass);
+      camOsc.frequency.setTargetAtTime(midiToFreq(midi), ctx.currentTime, 0.05);
+      camFilt.frequency.setTargetAtTime(300 + cam.bright * 3500, ctx.currentTime, 0.05);
+    }
+
+    // ---- Mic autotune-lite ----
+    const det = detectPitchHz();
+    if (det.hz > 0) {
+      const midi = snapMidi(hzToMidi(det.hz), scaleName, rootClass);
+      tuneOsc.frequency.setTargetAtTime(midiToFreq(midi), ctx.currentTime, 0.03);
+      tuneGain.gain.setTargetAtTime(Math.min(0.45, det.rms * 6), ctx.currentTime, 0.02);
+    } else {
+      tuneGain.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+    }
+
+    // ---- Rhythm scheduler ----
+    const now = ctx.currentTime;
+    while (now - lastStepT >= stepLenSec()) {
+      lastStepT += stepLenSec();
+      const meter = METERS[meterName];
+      stepIdx = (stepIdx + 1) % meter.len;
+      if (meter.hits[stepIdx]) {
+        // pick a scale degree using qubit marginals
+        const m0 = qubits.marginal(0), m1 = qubits.marginal(1);
+        const scale = SCALES[scaleName];
+        const degree = Math.floor(((m0 * 2 + m1) * scale.length) % scale.length);
+        const oct = stepIdx % 2 === 0 ? 60 : 48;
+        const midi = oct + rootClass + scale[degree];
+        const vel = 0.6 + 0.4 * (hand.pinch || 0.5);
+        fireImpulse(midi, vel);
+        fireBolt((stepIdx / meter.len) * Math.PI * 2);
+      }
+    }
+    ui.bpm.textContent = currentBpm();
+
+    // ---- Quantum HUD ----
+    for (let q = 0; q < 4; q++) {
+      const p = qubits.marginal(q);
+      ui.qb[q].style.height = (Math.round(p * 100)) + '%';
+    }
+    document.getElementById('qg').textContent = qubits.lastGate;
+    document.getElementById('qperm').textContent = '[' + routePerm.join(',') + ']';
+    document.getElementById('qent').textContent = qubits.entropy().toFixed(2);
+
+    // ---- Meter levels ----
+    const tmp = new Uint8Array(ch[0].analyser.frequencyBinCount);
+    for (let i = 0; i < 4; i++) {
+      ch[i].analyser.getByteFrequencyData(tmp);
+      let sum = 0; for (let k = 0; k < tmp.length; k++) sum += tmp[k];
+      const lvl = sum / (tmp.length * 255);
+      ui.m[i].style.width = Math.min(100, lvl * 130) + '%';
+      ui.g[i].textContent = lvl.toFixed(2);
+    }
+    masterAnalyser.getByteFrequencyData(masterFreq);
+    let msum = 0; for (let k = 0; k < masterFreq.length; k++) msum += masterFreq[k];
+    const mlvl = msum / (masterFreq.length * 255);
+    ui.mM.style.width = Math.min(100, mlvl * 130) + '%';
+    ui.gM.textContent = master.gain.value.toFixed(2);
+
+    // ---- Camera image dimension warp by frequency content ----
+    masterAnalyser.getFloatTimeDomainData(masterTime);
+    let lowE = 0, midE = 0, highE = 0;
+    const bins = masterFreq.length;
+    for (let k = 0; k < bins; k++) {
+      const v = masterFreq[k] / 255;
+      if (k < bins * 0.15) lowE += v;
+      else if (k < bins * 0.55) midE += v;
+      else highE += v;
+    }
+    lowE /= bins * 0.15; midE /= bins * 0.4; highE /= bins * 0.45;
+    // X-scale by lows, Y-scale by highs, skew by mids
+    const sx = 1 + lowE * 0.6;
+    const sy = 1 + highE * 0.4;
+    const skew = (midE - 0.3) * 14;
+    camEl.style.transform = `scale(${sx.toFixed(3)}, ${sy.toFixed(3)}) skewX(${skew.toFixed(2)}deg)`;
+    camEl.style.filter = `contrast(${(1 + highE*0.6).toFixed(2)}) hue-rotate(${(hand.x * 90).toFixed(1)}deg) saturate(${(1 + midE).toFixed(2)})`;
+
+    // ---- 3D oscillator-lightning ----
+    const tnow = t * 0.001;
+    knotWire.rotation.x = tnow * 0.2 + hand.y * 0.5;
+    knotWire.rotation.y = tnow * 0.3 + hand.x * 1.0;
+    knotWire.scale.setScalar(1 + lowE * 0.6);
+    knotMat.opacity = 0.35 + mlvl * 0.6;
+    knotMat.color.setHSL((hand.x + tnow * 0.05) % 1, 0.85, 0.55);
+
+    // Deform the trace into an oscillator-around-knot ribbon
+    for (let i = 0; i < TRACE_N; i++) {
+      const u = i / (TRACE_N - 1);
+      const ang = u * Math.PI * 4 + tnow * 0.6;
+      const tIdx = Math.floor(u * masterTime.length);
+      const samp = masterTime[tIdx] || 0;
+      const r = 2 + samp * (1.5 + hand.z * 2) + 0.1 * Math.sin(ang * 7 + tnow);
+      tracePos[i*3]   = Math.cos(ang) * r;
+      tracePos[i*3+1] = Math.sin(ang) * r;
+      tracePos[i*3+2] = samp * 1.2 + 0.4 * Math.sin(ang * 3 + tnow * 0.8);
+    }
+    traceGeo.attributes.position.needsUpdate = true;
+    traceMat.color.setHSL((tnow * 0.07 + 0.6) % 1, 0.7, 0.6 + mlvl * 0.3);
+    traceMat.opacity = 0.5 + mlvl * 0.5;
+
+    // Decay bolts
+    for (const b of bolts) {
+      if (b.life > 0) {
+        b.life -= 0.06;
+        b.mat.opacity = Math.max(0, b.life);
+      }
+    }
+
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(loop);
+
+  // Surface a tiny status line on the boot text in case mic worked but cam doesn't
+  console.log('solarmix online — leap ws + camera mjpeg + autotune + quantum router');
+}
+</script>
+</body>
+</html>

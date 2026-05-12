@@ -1,0 +1,21 @@
+[package]
+name = "solarmix"
+version = "0.1.0"
+edition = "2024"
+description = "Leap-driven feedback rhythm machine: Pi camera + browser mic + colored noise + 4-line FDN routed by a 4-qubit circuit."
+
+[dependencies]
+tokio = { version = "1", features = ["full", "process", "signal"] }
+axum = { version = "0.8", features = ["ws"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+bytes = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
