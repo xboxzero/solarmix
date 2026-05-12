@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&rec_dir)?;
 
     let state = SharedState::new();
+    state.apply_preset(state.drum_preset.load(std::sync::atomic::Ordering::Relaxed));
     // streams are !Send — keep them on the main thread for their entire lifetime.
     let (_streams, handle) = Engine::start(state, rec_dir)?;
 

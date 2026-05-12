@@ -6,7 +6,7 @@
 //! All DSP runs in the output callback so latency = one block.
 
 use crate::audio::{
-    delay::Delay, drums::DrumMachine, eq::Eq3, experiment::Experiment, looper::Looper,
+    delay::Delay, drums::DrumMachine, eq::Eq3, experiment::Experiment,
     quantum::QuantumMod, recorder::Recorder, reverb::Reverb, simd, BUFFER_SIZE, SAMPLE_RATE,
 };
 use crate::state::SharedState;
@@ -181,7 +181,6 @@ impl Engine {
         let mut eq = Eq3::new(out_sr);
         let mut drums = DrumMachine::new(out_sr);
         let mut experiment = Experiment::new(out_sr);
-        let mut looper = Looper::new(out_sr, 30.0);
         let mut qmod = QuantumMod::new();
 
         // smoothed params (1-pole) so UI sliders don't zipper-noise the audio
@@ -196,9 +195,12 @@ impl Engine {
         let mut sm_eq_mi = state.eq_mid_db.get();
         let mut sm_eq_hi = state.eq_high_db.get();
         let mut sm_drum_g = state.drum_gain.get();
-        let mut sm_loop_g = state.looper_gain.get();
+        let mut sm_bass_g = state.bass_gain.get();
+        let mut sm_swing = state.drum_swing.get();
         let mut sm_exp_f = state.exp_freq.get();
         let mut sm_exp_a = state.exp_amp.get();
+        let mut last_preset: u8 = 255;
+        let mut last_bass_notes_seen = [0u32; 16];
         let mut sm_auto_gain = 1.0_f32;
         let mut auto_phase = 0.0_f32; // automation LFO phase
 
@@ -219,6 +221,28 @@ impl Engine {
             let qout = qmod.out();
             let smooth_a = qmod.smoothing_coef(state_out.quantum_smooth.get());
 
+            // preset hot-swap: when web sends a new preset id, repopulate patterns
+            let cur_preset = state_out.drum_preset.load(Ordering::Relaxed);
+            if cur_preset != last_preset {
+                state_out.apply_preset(cur_preset);
+                last_preset = cur_preset;
+            }
+
+            // push bass note schedule from state into the drum machine
+            let mut bass_changed = false;
+            for i in 0..16 {
+                let bits = state_out.bass_notes[i].get().to_bits();
+                if bits != last_bass_notes_seen[i] {
+                    bass_changed = true;
+                    last_bass_notes_seen[i] = bits;
+                }
+            }
+            if bass_changed {
+                let mut notes = [55.0_f32; 16];
+                for i in 0..16 { notes[i] = state_out.bass_notes[i].get(); }
+                drums.set_bass_notes(&notes);
+            }
+
             // automation LFO
             let auto_on = state_out.automation_enabled.load(Ordering::Relaxed);
             let auto_rate = state_out.automation_rate.get();
@@ -227,7 +251,8 @@ impl Engine {
             if auto_phase > std::f32::consts::TAU { auto_phase -= std::f32::consts::TAU; }
             let auto_lfo = if auto_on { auto_phase.sin() * 0.5 + 0.5 } else { 0.5 };
 
-            // target params (with optional automation + quantum chaos)
+            // quantum now reaches deep into the signal: it perturbs reverb, delay,
+            // drum swing, bass detune, and the experiment frequency.
             let chaos = state_out.quantum_amount.get();
             let mix_q = |base: f32, q: f32, amt: f32| -> f32 { base + q * amt * chaos };
             let auto_blend = |base: f32, lfo: f32, amt: f32| -> f32 {
@@ -235,18 +260,19 @@ impl Engine {
             };
 
             let t_master = state_out.master_gain.get();
-            let t_rev_mix = mix_q(state_out.reverb_mix.get(), qout[1], 0.1)
-                .clamp(0.0, 1.0);
-            let t_rev_size = mix_q(state_out.reverb_size.get(), qout[2], 0.1).clamp(0.0, 1.0);
+            let t_rev_mix = mix_q(state_out.reverb_mix.get(), qout[1], 0.15).clamp(0.0, 1.0);
+            let t_rev_size = mix_q(state_out.reverb_size.get(), qout[2], 0.15).clamp(0.0, 1.0);
             let t_rev_damp = state_out.reverb_damp.get();
             let t_del_time = auto_blend(state_out.delay_time_ms.get(), 50.0 + auto_lfo * 700.0, 0.3);
-            let t_del_fb = mix_q(state_out.delay_feedback.get(), qout[3], 0.08).clamp(0.0, 0.9);
+            let t_del_fb = mix_q(state_out.delay_feedback.get(), qout[3], 0.12).clamp(0.0, 0.9);
             let t_del_mix = state_out.delay_mix.get();
             let t_eq_lo = state_out.eq_low_db.get();
             let t_eq_mi = state_out.eq_mid_db.get();
             let t_eq_hi = state_out.eq_high_db.get();
             let t_drum_g = state_out.drum_gain.get();
-            let t_loop_g = state_out.looper_gain.get();
+            let t_bass_g = state_out.bass_gain.get();
+            // swing is user-set + a slow quantum wobble for organic groove
+            let t_swing = (state_out.drum_swing.get() + qout[0] * 0.08 * chaos).clamp(0.0, 0.5);
             let t_exp_f = mix_q(state_out.exp_freq.get(), qout[0], 30.0).max(20.0);
             let t_exp_a = state_out.exp_amp.get();
 
@@ -262,7 +288,8 @@ impl Engine {
             sm_eq_mi += (t_eq_mi - sm_eq_mi) * smooth_a;
             sm_eq_hi += (t_eq_hi - sm_eq_hi) * smooth_a;
             sm_drum_g += (t_drum_g - sm_drum_g) * smooth_a;
-            sm_loop_g += (t_loop_g - sm_loop_g) * smooth_a;
+            sm_bass_g += (t_bass_g - sm_bass_g) * smooth_a;
+            sm_swing += (t_swing - sm_swing) * 0.02;
             sm_exp_f += (t_exp_f - sm_exp_f) * 0.05;
             sm_exp_a += (t_exp_a - sm_exp_a) * smooth_a;
 
@@ -300,31 +327,33 @@ impl Engine {
                 state_out.drum_pattern[1].load(Ordering::Relaxed),
                 state_out.drum_pattern[2].load(Ordering::Relaxed),
                 state_out.drum_pattern[3].load(Ordering::Relaxed),
+                state_out.drum_pattern[4].load(Ordering::Relaxed),
             ];
             let drum_on = state_out.drum_enabled.load(Ordering::Relaxed);
-            let looper_st = state_out.looper_state();
             let recording = state_out.recording.load(Ordering::Relaxed);
+            // bass voice gets a slow chorus driven by quantum out[2]
+            let bass_detune = qout[2] * 0.6 + qout[3] * 0.4; // Hz
 
-            // process samples
+            // process samples — runs forever, never auto-stops
             let mut out_sum_sq = 0.0_f32;
             for f in 0..frames {
                 let mic = cons.try_pop().unwrap_or(0.0) * sm_auto_gain;
                 let exp = experiment.process(sm_exp_f, sm_exp_a, state_out.exp_waveform.load(Ordering::Relaxed));
-                let drum = if drum_on { drums.process(&drum_pattern) * sm_drum_g } else { 0.0 };
+                let (drum_raw, bass_raw) = if drum_on {
+                    drums.process(&drum_pattern, sm_swing, bass_detune)
+                } else {
+                    (0.0, 0.0)
+                };
+                let drum = drum_raw * sm_drum_g;
+                let bass = bass_raw * sm_bass_g;
 
-                let pre = mic + exp + drum;
+                let pre = mic + exp + drum + bass;
                 let eqd = eq.process(pre);
                 let (dl_l, dl_r) = delay.process(eqd, sm_del_fb, sm_del_mix);
                 let (rv_l, rv_r) = reverb.process((dl_l + dl_r) * 0.5, sm_rev_mix);
 
-                // mix delay (stereo) and reverb (stereo)
                 let mut yl = dl_l * (1.0 - sm_rev_mix) + rv_l;
                 let mut yr = dl_r * (1.0 - sm_rev_mix) + rv_r;
-
-                // looper
-                let (lp_l, lp_r) = looper.process(looper_st, yl, yr);
-                yl += lp_l * sm_loop_g;
-                yr += lp_r * sm_loop_g;
 
                 yl *= sm_master;
                 yr *= sm_master;
@@ -347,7 +376,7 @@ impl Engine {
             let rms = (out_sum_sq / (frames.max(1) as f32 * 2.0)).sqrt();
             let cur = state_out.output_level.get();
             state_out.output_level.set(cur * 0.85 + rms * 0.15);
-            state_out.loop_position.set(looper.position_norm());
+            state_out.current_step.store(drums.current_step(), Ordering::Relaxed);
         };
 
         let out_stream = match out_cfg_supported.sample_format() {

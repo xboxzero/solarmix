@@ -3,7 +3,6 @@ pub mod reverb;
 pub mod delay;
 pub mod eq;
 pub mod drums;
-pub mod looper;
 pub mod recorder;
 pub mod quantum;
 pub mod experiment;
