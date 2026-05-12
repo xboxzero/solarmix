@@ -14,7 +14,7 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 12px/1.35 ui-monospace, "JetBrains Mono", Menlo, monospace; overflow: hidden; }
-  #cam {
+  .camsrc {
     position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
     object-fit: cover; opacity: 0.85; filter: contrast(1.1) saturate(1.1);
     transform-origin: 50% 50%;
@@ -108,7 +108,8 @@
 </style>
 </head>
 <body>
-  <img id="cam" alt="" />
+  <video id="camVid" class="camsrc" autoplay muted playsinline></video>
+  <img id="camImg" class="camsrc" alt="" style="display:none" />
   <canvas id="scene"></canvas>
   <div id="grid"></div>
   <div class="hand-ring" id="ring"></div>
@@ -430,11 +431,43 @@ async function start() {
 
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
 
-  // ===== Camera image =====
-  const camEl = document.getElementById('cam');
-  camEl.src = '/camera.mjpeg';
-  camEl.onerror = () => { /* page works without camera */ };
-  // Hidden canvas to sample image centroid -> drives cam-osc pitch
+  // ===== Camera: prefer local device cam (real-time) over Pi MJPEG (buffered).
+  // The MJPEG stream has visible latency through <img> multipart; getUserMedia
+  // video plays at the cam's native framerate with no extra buffering.
+  const camVid = document.getElementById('camVid');
+  const camImg = document.getElementById('camImg');
+  let camEl = camVid; // active element, used by sampleCamera + transforms
+  let camIsVideo = true;
+  let camSource = 'none';
+  async function setupCamera() {
+    if (window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        camVid.srcObject = stream;
+        await camVid.play().catch(() => {});
+        camIsVideo = true;
+        camEl = camVid;
+        camVid.style.display = 'block';
+        camImg.style.display = 'none';
+        camSource = 'local';
+        return;
+      } catch (e) {
+        console.warn('[solarmix] local camera unavailable:', e.message);
+      }
+    }
+    // Fallback: Pi-cam MJPEG via the backend.
+    camImg.src = '/camera.mjpeg';
+    camImg.style.display = 'block';
+    camVid.style.display = 'none';
+    camIsVideo = false;
+    camEl = camImg;
+    camSource = 'mjpeg';
+  }
+  setupCamera();
+  // Hidden canvas to sample image centroid -> drives cam-osc pitch + motion
   const camCanvas = document.createElement('canvas');
   camCanvas.width = 64; camCanvas.height = 48;
   const camCtx = camCanvas.getContext('2d', { willReadFrequently: true });
@@ -623,20 +656,22 @@ async function start() {
   fdnOut.connect(fdnShape);
   fdnShape.connect(ch[3].gain);
 
-  // Impulse generator: short tonal blip into FDN at scale-degree pitch
-  function fireImpulse(midi, vel) {
-    const now = ctx.currentTime;
+  // Impulse generator: short tonal blip into FDN at scale-degree pitch.
+  // Accepts an optional `when` time so quantum arpeggios can be scheduled
+  // sample-accurately on the audio clock.
+  function fireImpulse(midi, vel, when) {
+    const t0 = when ?? ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = 'triangle';
     osc.frequency.value = midiToFreq(midi);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(vel * 0.6, now + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(vel * 0.6, t0 + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.04);
     osc.connect(g);
     g.connect(fdnInput);
-    osc.start(now);
-    osc.stop(now + 0.06);
+    osc.start(t0);
+    osc.stop(t0 + 0.06);
   }
 
   // ===== Quantum router =====
@@ -660,11 +695,27 @@ async function start() {
         [2,0,1,3],[2,1,0,3],[2,3,0,1],[3,2,1,0],
       ];
       routePerm = PERMS[m % PERMS.length];
-      // Re-pick noise color biased by qubit-0 marginal (use lastGate=measure)
-      const colorIdx = m % NOISE_COLORS.length;
-      const color = NOISE_COLORS[colorIdx];
+      // Re-pick noise color biased by the collapsed basis state.
+      const color = NOISE_COLORS[m % NOISE_COLORS.length];
       document.getElementById('noiseSel').value = color;
       startNoise(color);
+      // ===== Audible collapse =====
+      // Fire a 4-note arpeggio of the measured basis state. Each bit picks
+      // either a low or high scale degree, so different collapse outcomes
+      // sound distinctly different.
+      const scale = SCALES[scaleName] || SCALES.major;
+      const root = 48 + rootClass;
+      const t0 = ctx.currentTime;
+      for (let q = 0; q < 4; q++) {
+        const bit = (m >> q) & 1;
+        const degLow = scale[q % scale.length];
+        const degHigh = scale[(q + 3) % scale.length];
+        const midi = root + (bit ? degHigh + 12 : degLow);
+        fireImpulse(midi, 0.55 + 0.10 * bit, t0 + q * 0.075);
+        // Also fire a noise-key burst on the same pitches, so ch2 sings the
+        // collapse in the noise color we just snapped to.
+        setTimeout(() => playNoiseKey(midi, color, 0.55 + 0.10 * bit), q * 75);
+      }
     }
   }
   document.getElementById('qstep').addEventListener('click', () => stepCircuit());
@@ -966,8 +1017,12 @@ async function start() {
   // Motion = sum of absolute per-pixel grayscale delta vs previous frame,
   // normalized to 0..1. Spikes can trigger FDN impulses.
   let prevGray = null;
+  function camReady() {
+    if (camIsVideo) return camEl.readyState >= 2 && camEl.videoWidth > 0;
+    return camEl.complete && camEl.naturalWidth > 0;
+  }
   function sampleCamera() {
-    if (!camEl.complete || camEl.naturalWidth === 0) return null;
+    if (!camReady()) return null;
     try {
       camCtx.drawImage(camEl, 0, 0, camCanvas.width, camCanvas.height);
       const id = camCtx.getImageData(0, 0, camCanvas.width, camCanvas.height).data;
@@ -1023,18 +1078,24 @@ async function start() {
     const masterTarget = 0.05 + hand.y * 0.95;
     master.gain.setTargetAtTime(masterTarget, nowT, 0.008);
 
-    // ---- Channel gains shaped by quantum routing + pinch ----
+    // ---- Channel gains: routing + master + qubit-marginal modulation ----
+    // Each qubit's marginal probability boosts its own channel, so the 4-qubit
+    // state literally drives the 4-channel balance: as qubits evolve, the mix
+    // shifts; on measurement, the channel of the collapsed bits surges.
+    const qm = [qubits.marginal(0), qubits.marginal(1), qubits.marginal(2), qubits.marginal(3)];
+    const ent = qubits.entropy(); // 0..4 for 4 qubits
+    const entNorm = Math.min(1, ent / 4);
     const base = [0.55, 0.50, 0.45, 0.65];
     for (let i = 0; i < 4; i++) {
       const slot = routePerm.indexOf(i);
       const route = 0.55 + 0.35 * (slot / 3);
-      const g = base[i] * route * (0.4 + 0.6 * masterTarget);
+      const qboost = 0.55 + qm[i] * 0.75;
+      const g = base[i] * route * qboost * (0.4 + 0.6 * masterTarget);
       ch[i].gain.gain.setTargetAtTime(g, nowT, 0.05);
       ch[i].value = g;
     }
-    // Feedback: hand Z drives base feedback, hand pinch shoves it higher (capped
-    // to avoid runaway). This makes pinching the hand do something dramatic.
-    const fbAmt = Math.min(0.95, 0.30 + 0.55 * hand.z + 0.20 * hand.pinch);
+    // Feedback: hand Z + pinch + qubit-3 marginal. High entropy adds tone.
+    const fbAmt = Math.min(0.95, 0.30 + 0.45 * hand.z + 0.20 * hand.pinch + 0.12 * qm[3]);
     for (const f of fdnFeed) f.gain.setTargetAtTime(fbAmt, nowT, 0.015);
     // Hand Y stretches the FDN delay times in real-time -> the feedback's
     // resonant pitch + decay character tracks the hand height.
@@ -1043,9 +1104,10 @@ async function start() {
       fdnDelays[i].delayTime.setTargetAtTime(dBase * (1 + i * 0.55), nowT, 0.02);
     }
 
-    // ---- Hand X -> noise lowpass cutoff (drone tone tracks the hand) ----
+    // ---- Hand X -> noise lowpass cutoff; qubit-1 marginal adds drone weight.
     const noiseCutoff = 250 + hand.x * 7000;
     noiseLP.frequency.setTargetAtTime(noiseCutoff, nowT, 0.01);
+    noiseDroneGain.gain.setTargetAtTime(0.10 + qm[1] * 0.25, nowT, 0.1);
 
     // ---- Pinch rising edge -> fire a keyboard hit at the hand-X position ----
     if (hand.pinch > 0.55 && prevPinch <= 0.55) {
@@ -1063,7 +1125,8 @@ async function start() {
       // brightness -> bandpass center
       camFilt.frequency.setTargetAtTime(300 + cam.bright * 3700, nowT, 0.008);
       // cam.cy -> Q (resonance). Top of frame = bright/screamy, bottom = mellow.
-      const qVal = 2 + (1 - cam.cy) * 16;
+      // Entropy adds extra Q so quantum superposition reads as audible chaos.
+      const qVal = 2 + (1 - cam.cy) * 16 + entNorm * 8;
       camFilt.Q.setTargetAtTime(qVal, nowT, 0.02);
       // Motion: slow envelope follower for amplitude swell + spike trigger
       motionEnv = motionEnv * 0.82 + cam.motion * 0.18;
@@ -1153,10 +1216,20 @@ async function start() {
 
     // ---- 3D oscillator-lightning ----
     const tnow = t * 0.001;
-    knotWire.rotation.x = tnow * 0.2 + hand.y * 0.8;
-    knotWire.rotation.y = tnow * 0.3 + hand.x * 1.3;
-    knotWire.rotation.z = hand.z * 0.6;
-    knotWire.scale.setScalar(1 + lowE * 0.6 + hand.pinch * 0.4);
+    // Knot becomes a literal puppet of the leap hand: rotations track hand
+    // directly; per-axis scale stretches the knot along x/y/z with hand
+    // position (so moving your hand visibly squishes / stretches the knot
+    // along that axis); pinch crushes the y axis.
+    knotWire.rotation.x = tnow * 0.2 + hand.y * 1.2;
+    knotWire.rotation.y = tnow * 0.3 + hand.x * 1.8;
+    knotWire.rotation.z = (hand.z - 0.5) * 1.4;
+    const sx = (0.7 + hand.x * 0.9) * (1 + lowE * 0.4);
+    const sy = (0.7 + hand.y * 0.9) * (1 - hand.pinch * 0.35) * (1 + highE * 0.3);
+    const sz = (0.7 + hand.z * 0.9);
+    knotWire.scale.set(sx, sy, sz);
+    // Drift the knot toward the leap cursor so it follows your hand around.
+    knotWire.position.x = (hand.x - 0.5) * 1.8;
+    knotWire.position.y = (hand.y - 0.5) * 1.4;
     knotMat.opacity = 0.35 + mlvl * 0.6;
     knotMat.color.setHSL((hand.x + tnow * 0.05) % 1, 0.85, 0.55);
 
