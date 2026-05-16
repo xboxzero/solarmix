@@ -1,9 +1,13 @@
 [package]
-name = "solarmix"
-version = "0.1.0"
+name = "tezeta"
+version = "0.2.0"
 edition = "2021"
-description = "Real-time web-controlled audio mixer/synth for Raspberry Pi 5 with quantum-inspired modulation"
+description = "Ethiopian-mode web-controlled synth: Pure Data engine, Lissajous touch UI, multiplied-qubit patchbay router. Runs on a Raspberry Pi 5, audio out from the Pi only."
 license = "MIT"
+
+[[bin]]
+name = "tezeta"
+path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }
@@ -22,6 +26,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"
 anyhow = "1"
+libpd-rs = { path = "vendor-libpd-rs" }
 
 [profile.release]
 opt-level = 3
