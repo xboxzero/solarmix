@@ -60,10 +60,7 @@
     // clippy::unimplemented,
     // clippy::unreachable,
 )]
-#![cfg_attr(all(),
-doc = ::embed_doc_image::embed_image!("sine_patch", "assets/sine_patch.png"),
-doc = ::embed_doc_image::embed_image!("phasor_patch", "assets/phasor_patch.png"),
-)]
+// removed embed_doc_image attrs — assets/ trimmed from vendor copy.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/alisomay/libpd-rs/main/assets/logo_transparent.png",
     html_favicon_url = "https://raw.githubusercontent.com/alisomay/libpd-rs/main/assets/favicon/favicon.ico"
