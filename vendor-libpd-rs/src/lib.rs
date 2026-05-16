@@ -1085,6 +1085,13 @@ pub struct PdAudioContext {
 }
 
 impl PdAudioContext {
+    /// Sets this instance as the current active instance for the calling thread.
+    /// Required before invoking free libpd functions (e.g. `send_float_to`) from
+    /// an audio thread that hasn't otherwise touched this instance.
+    pub fn set_as_current(&self) {
+        self.instance.set_as_current();
+    }
+
     /// Sets the instance as the current one and calls [`receive_messages_from_pd`](crate::functions::receive::receive_messages_from_pd).
     pub fn receive_messages_from_pd(&self) {
         self.instance.set_as_current();

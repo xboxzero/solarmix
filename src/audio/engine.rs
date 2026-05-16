@@ -95,6 +95,10 @@ impl Engine {
         let out_ch_us = out_channels as usize;
 
         let mut output_callback = move |data: &mut [f32]| {
+            // Bind this Pd instance to the audio thread before any free libpd
+            // calls (send_float_to etc). Without this libpd's sys_lock derefs
+            // a NULL INTER pointer and segfaults the cpal callback thread.
+            ctx.set_as_current();
             let frames = data.len() / out_ch_us.max(1);
 
             // ---- step qubit router once per audio block ----
