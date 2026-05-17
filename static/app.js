@@ -389,6 +389,7 @@ animate();
 // =====================================================================
 let outLevelSmoothed = 0;
 function onTick(m) {
+  $('in-bar').style.width = Math.min(100, m.in_level * 600) + '%';
   $('out-bar').style.width = Math.min(100, m.out_level * 600) + '%';
   $('bpm-val').textContent = m.bpm.toFixed(0);
   $('chaos-val').textContent = Math.round(m.chaos * 100) + '%';
