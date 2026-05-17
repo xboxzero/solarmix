@@ -1,7 +1,7 @@
-//! Audio engine: cpal output stream → libpd processes every block. No DSP
-//! lives in Rust anymore — the Pd patch owns the signal. Recorder.rs taps the
-//! mixed output for WAV capture.
+//! Audio engine: cpal output stream → pure Rust DSP processes every block.
+//! Recorder.rs taps the mixed output for WAV capture.
 
+pub mod dsp;
 pub mod engine;
 pub mod recorder;
 

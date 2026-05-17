@@ -2,7 +2,7 @@
 name = "tezeta"
 version = "0.2.0"
 edition = "2021"
-description = "Ethiopian-mode web-controlled synth: Pure Data engine, Lissajous touch UI, multiplied-qubit patchbay router. Runs on a Raspberry Pi 5, audio out from the Pi only."
+description = "Ethiopian-mode web-controlled synth: Pure Rust DSP engine, Lissajous touch UI, multiplied-qubit patchbay router. Runs on a Raspberry Pi 5, audio out from the Pi only."
 license = "MIT"
 
 [[bin]]
@@ -26,7 +26,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"
 anyhow = "1"
-libpd-rs = { path = "vendor-libpd-rs" }
 
 [profile.release]
 opt-level = 3
