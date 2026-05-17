@@ -14,6 +14,27 @@
 
 import * as THREE from './vendor/three.module.js';
 
+// =====================================================================
+// Web Audio Synth
+// =====================================================================
+const synth = new TezetaSynth();
+let audioReady = false;
+
+async function initAudio() {
+  try {
+    await synth.init();
+    audioReady = true;
+    console.log('Audio synth ready');
+  } catch (e) {
+    console.error('Audio init failed:', e);
+  }
+}
+
+// Resume audio on first user interaction (browser autoplay policy)
+function resumeAudio() {
+  if (audioReady) synth.resume();
+}
+
 // ----- error surface (Safari hides JS errors otherwise) -----
 function showError(msg) {
   const d = document.createElement('div');
@@ -33,6 +54,16 @@ window.addEventListener('error', e => {
   }
   showError(msg);
 });
+
+// Initialize audio on page load
+window.addEventListener('load', () => {
+  initAudio().catch(console.error);
+});
+
+// Resume audio on user interaction
+document.addEventListener('click', resumeAudio, { once: true });
+document.addEventListener('touchstart', resumeAudio, { once: true });
+document.addEventListener('keydown', resumeAudio, { once: true });
 
 window.addEventListener('unhandledrejection', e => {
   let msg = 'Unhandled Promise rejection';
@@ -240,6 +271,20 @@ function strikeAt(pointerId, clientX, clientY, intensity) {
   handles[voice].userData.t = t;
   handles[voice].userData.intensity = intensity;
   positionHandle(handles[voice]);
+
+  // Map curve parameter t to pitch (5-note window, ~qenet mode)
+  const baseNote = 440; // A4
+  const notes = [0, 2, 3, 5, 7]; // pentatonic intervals in semitones
+  const noteIdx = Math.round(t * (notes.length - 1));
+  const interval = notes[noteIdx] / 12; // convert to octaves
+  const hz = baseNote * Math.pow(2, interval);
+
+  // Trigger synth voice
+  if (audioReady) {
+    synth.setGate(voice, true);
+    synth.setPitch(voice, hz);
+  }
+
   send({ type: 'lissajous', voice, t, intensity });
 }
 
@@ -248,6 +293,12 @@ function release(pointerId) {
   if (voice === undefined) return;
   activePointers.delete(pointerId);
   handles[voice].userData.intensity = 0.0;
+
+  // Release synth voice
+  if (audioReady) {
+    synth.setGate(voice, false);
+  }
+
   send({ type: 'voice', voice, gate: false });
 }
 
@@ -380,6 +431,7 @@ if (masterEl) {
     if (!isNaN(v)) {
       send({ type: 'set', id: 'master', value: v });
       if (masterVal) masterVal.textContent = Math.round(v * 100) + '%';
+      if (audioReady) synth.setMaster(v);
     }
   });
 }
