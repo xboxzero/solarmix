@@ -18,7 +18,15 @@ import * as THREE from './vendor/three.module.js';
 window.addEventListener('error', e => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:60px;left:20px;right:20px;background:#3a0808;color:#ffeaea;padding:14px;border:1px solid #ff5050;border-radius:6px;font-family:monospace;font-size:12px;z-index:100;white-space:pre-wrap';
-  d.textContent = 'JS error: ' + (e.error ? (e.error.stack || e.message) : e.message);
+  let msg = '';
+  if (e.error && typeof e.error === 'object') {
+    msg = e.error.stack ? String(e.error.stack) : (e.error.message ? String(e.error.message) : String(e.error));
+  } else if (e.message) {
+    msg = String(e.message);
+  } else {
+    msg = 'Unknown error';
+  }
+  d.textContent = 'JS error: ' + msg;
   document.body.appendChild(d);
 });
 
@@ -44,7 +52,12 @@ function send(obj) {
 // Three.js scene
 // =====================================================================
 const canvas = document.getElementById('stage');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+} catch (e) {
+  throw new Error('WebGL not supported: ' + (e && e.message ? e.message : String(e)));
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0x03060a, 1);
 const scene = new THREE.Scene();
@@ -305,7 +318,12 @@ const $ = id => document.getElementById(id);
 
 function bindSlider(id, label) {
   const el = $(id);
-  el.addEventListener('input', () => { send({ type: 'set', id, value: parseFloat(el.value) }); if (label) label.textContent = el.value; });
+  if (!el) return;
+  el.addEventListener('input', () => {
+    const val = parseFloat(el.value);
+    if (!isNaN(val)) send({ type: 'set', id, value: val });
+    if (label) label.textContent = el.value;
+  });
 }
 bindSlider('chaos');
 bindSlider('bpm');
@@ -315,37 +333,50 @@ bindSlider('delay_fb');
 
 const masterEl = $('master');
 const masterVal = $('master-val');
-masterEl.addEventListener('input', () => {
-  const v = parseFloat(masterEl.value);
-  send({ type: 'set', id: 'master', value: v });
-  masterVal.textContent = Math.round(v * 100) + '%';
-});
-
-document.querySelectorAll('#modes button').forEach(b => {
-  b.addEventListener('click', () => {
-    document.querySelectorAll('#modes button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    send({ type: 'mode', value: parseInt(b.dataset.mode, 10) });
+if (masterEl) {
+  masterEl.addEventListener('input', () => {
+    const v = parseFloat(masterEl.value);
+    if (!isNaN(v)) {
+      send({ type: 'set', id: 'master', value: v });
+      if (masterVal) masterVal.textContent = Math.round(v * 100) + '%';
+    }
   });
-});
+}
 
-document.querySelectorAll('.voices .v').forEach(b => {
-  b.addEventListener('click', () => {
-    document.querySelectorAll('.voices .v').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
+const modeButtons = document.querySelectorAll('#modes button');
+if (modeButtons && modeButtons.length > 0) {
+  modeButtons.forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#modes button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      const mode = parseInt(b.dataset.mode, 10);
+      if (!isNaN(mode)) send({ type: 'mode', value: mode });
+    });
   });
-});
+}
+
+const voiceButtons = document.querySelectorAll('.voices .v');
+if (voiceButtons && voiceButtons.length > 0) {
+  voiceButtons.forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.voices .v').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+    });
+  });
+}
 
 const drumBtn = $('drum-btn');
-drumBtn.addEventListener('click', () => send({ type: 'toggle', id: 'drum' }));
+if (drumBtn) drumBtn.addEventListener('click', () => send({ type: 'toggle', id: 'drum' }));
 
 const recBtn = $('rec-btn');
 let recording = false;
-recBtn.addEventListener('click', () => {
-  recording = !recording;
-  recBtn.classList.toggle('on', recording);
-  send({ type: 'record', on: recording });
-});
+if (recBtn) {
+  recBtn.addEventListener('click', () => {
+    recording = !recording;
+    recBtn.classList.toggle('on', recording);
+    send({ type: 'record', on: recording });
+  });
+}
 
 // =====================================================================
 // Animate
@@ -389,23 +420,52 @@ animate();
 // =====================================================================
 let outLevelSmoothed = 0;
 function onTick(m) {
-  $('in-bar').style.width = Math.min(100, m.in_level * 600) + '%';
-  $('out-bar').style.width = Math.min(100, m.out_level * 600) + '%';
-  $('bpm-val').textContent = m.bpm.toFixed(0);
-  $('chaos-val').textContent = Math.round(m.chaos * 100) + '%';
-  $('liss-val').textContent = `${m.liss_a.toFixed(1)} : ${m.liss_b.toFixed(1)} : ${m.liss_c.toFixed(1)}`;
+  if (!m) return;
 
-  outLevelSmoothed += (m.out_level - outLevelSmoothed) * 0.18;
-  lissA = m.liss_a; lissB = m.liss_b; lissC = m.liss_c;
-  updateWires(m.qcoef);
+  const inBar = $('in-bar');
+  const outBar = $('out-bar');
+  if (inBar) inBar.style.width = Math.min(100, (m.in_level || 0) * 600) + '%';
+  if (outBar) outBar.style.width = Math.min(100, (m.out_level || 0) * 600) + '%';
+
+  const bpmVal = $('bpm-val');
+  if (bpmVal && m.bpm !== undefined) bpmVal.textContent = (m.bpm || 0).toFixed(0);
+
+  const chaosVal = $('chaos-val');
+  if (chaosVal && m.chaos !== undefined) chaosVal.textContent = Math.round((m.chaos || 0) * 100) + '%';
+
+  const lissVal = $('liss-val');
+  if (lissVal && m.liss_a !== undefined && m.liss_b !== undefined && m.liss_c !== undefined) {
+    lissVal.textContent = `${(m.liss_a || 0).toFixed(1)} : ${(m.liss_b || 0).toFixed(1)} : ${(m.liss_c || 0).toFixed(1)}`;
+  }
+
+  outLevelSmoothed += ((m.out_level || 0) - outLevelSmoothed) * 0.18;
+  if (m.liss_a !== undefined) lissA = m.liss_a;
+  if (m.liss_b !== undefined) lissB = m.liss_b;
+  if (m.liss_c !== undefined) lissC = m.liss_c;
+  if (m.qcoef) updateWires(m.qcoef);
 
   // sync master + chaos sliders without triggering input events
-  if (Math.abs(parseFloat(masterEl.value) - m.master) > 0.01) { masterEl.value = m.master; masterVal.textContent = Math.round(m.master*100)+'%'; }
+  if (masterEl && masterVal && m.master !== undefined) {
+    if (Math.abs(parseFloat(masterEl.value) - m.master) > 0.01) {
+      masterEl.value = m.master;
+      masterVal.textContent = Math.round(m.master * 100) + '%';
+    }
+  }
 
   // sync drum + rec + mode buttons
-  drumBtn.classList.toggle('on', m.drum_on);
-  if (recBtn.classList.contains('on') !== m.recording) { recording = m.recording; recBtn.classList.toggle('on', recording); }
-  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', parseInt(b.dataset.mode, 10) === m.mode));
+  if (drumBtn && m.drum_on !== undefined) drumBtn.classList.toggle('on', m.drum_on);
+  if (recBtn && m.recording !== undefined) {
+    if (recBtn.classList.contains('on') !== m.recording) {
+      recording = m.recording;
+      recBtn.classList.toggle('on', recording);
+    }
+  }
+  if (m.mode !== undefined) {
+    document.querySelectorAll('#modes button').forEach(b => {
+      const btnMode = parseInt(b.dataset.mode, 10);
+      b.classList.toggle('on', !isNaN(btnMode) && btnMode === m.mode);
+    });
+  }
 }
 
 connect();
