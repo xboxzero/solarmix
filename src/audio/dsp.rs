@@ -447,12 +447,12 @@ impl TazetaSynth {
     }
 
     pub fn process(&mut self, pitches: &[f32; 4]) -> f32 {
-        let k = self.krar.process(pitches[0], self.sr);
-        let m = self.masinko.process(pitches[1], self.sr);
-        let w = self.washint.process(pitches[2]);
-        let kb = self.kebero.process(pitches[3]);
+        let k = self.krar.process(pitches[0], self.sr) * 2.0;
+        let m = self.masinko.process(pitches[1], self.sr) * 2.0;
+        let w = self.washint.process(pitches[2]) * 2.0;
+        let kb = self.kebero.process(pitches[3]) * 2.0;
 
-        let mut out = (k + m + w + kb) * 0.25;
+        let out = (k + m + w + kb) * 0.25;
 
         let with_delay = self.delay.process(out, 360.0, self.sr);
         self.reverb.process(with_delay)

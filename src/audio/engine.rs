@@ -95,8 +95,10 @@ impl Engine {
 
                 if gate != last_gate[v] {
                     if gate {
+                        tracing::debug!("Voice {} triggered at {} Hz", v, pitch);
                         synth.trigger_voice(v);
                     } else {
+                        tracing::debug!("Voice {} released", v);
                         synth.release_voice(v);
                     }
                     last_gate[v] = gate;
@@ -177,7 +179,12 @@ impl Engine {
             }
             let rms = (out_sum_sq / frames as f32).sqrt();
             let cur = state_out.output_level.get();
-            state_out.output_level.set(cur * 0.85 + rms * 0.15);
+            let new_level = cur * 0.85 + rms * 0.15;
+            state_out.output_level.set(new_level);
+
+            if new_level > 0.01 {
+                tracing::debug!("Output level: {:.4}", new_level);
+            }
 
             block_seconds = frames as f32 / out_sr;
         };
