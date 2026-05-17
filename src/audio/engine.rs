@@ -16,15 +16,18 @@ use cpal::{SampleFormat, StreamConfig};
 use libpd_rs::functions::send::send_float_to;
 use libpd_rs::functions::util::calculate_ticks;
 use libpd_rs::Pd;
+use ringbuf::HeapRb;
+use ringbuf::traits::{Consumer, Producer, Split};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Holds the cpal stream + the live Pd instance. cpal::Stream is !Send so this
+/// Holds the cpal streams + the live Pd instance. cpal::Stream is !Send so this
 /// stays on the main thread for its entire lifetime — same as the original.
 pub struct EngineStreams {
     _out_stream: cpal::Stream,
+    _in_stream: Option<cpal::Stream>,
     _pd: Pd,
 }
 
@@ -70,7 +73,8 @@ impl Engine {
         tracing::info!("output cfg: {} ch @ {} Hz", out_channels, out_sr);
 
         // ---------- libpd ----------
-        let mut pd = Pd::init_and_configure(0, out_channels, out_sr)
+        let in_channels = 1_i32;
+        let mut pd = Pd::init_and_configure(in_channels, out_channels, out_sr)
             .map_err(|e| anyhow::anyhow!("libpd init: {e}"))?;
         // Add the patch directory to Pd's search path so [abs~] / [r~] / externals resolve.
         if let Some(dir) = patch_path.parent() {
@@ -87,12 +91,18 @@ impl Engine {
         let recorder = Arc::new(Recorder::spawn(out_sr as u32));
         let recorder_cb = recorder.clone();
 
+        // ---------- microphone ring buffer ----------
+        let (mic_prod, mic_cons) = HeapRb::<f32>::new(8192).split();
+        let mic_prod = Arc::new(parking_lot::Mutex::new(mic_prod));
+        let mic_cons = Arc::new(parking_lot::Mutex::new(mic_cons));
+
         // ---------- audio callback state ----------
         let state_out = state.clone();
         let mut router = QubitRouter::new();
         let mut last_sent = LastSent::default();
         let mut block_seconds = 256.0 / out_sr as f32;
         let out_ch_us = out_channels as usize;
+        let mic_cons_cb = mic_cons.clone();
 
         let mut output_callback = move |data: &mut [f32]| {
             // Bind this Pd instance to the audio thread before any free libpd
@@ -147,9 +157,40 @@ impl Engine {
                 state_out.qcoef[i].set(*v);
             }
 
+            // ---- microphone input + modulation ----
+            let mut in_buf = vec![0.0_f32; frames];
+            if let Some(mut cons) = mic_cons_cb.try_lock() {
+                for f in 0..frames {
+                    if let Some(s) = cons.try_pop() {
+                        in_buf[f] = s;
+                    }
+                }
+            }
+            // Apply mic modulation: blend mic RMS into a target parameter
+            let mic_rms = state_out.input_level.get();
+            let mod_target = state_out.mic_mod.get() as u8;
+            match mod_target {
+                1 => {
+                    // chaos modulation: add mic_rms to chaos (clamped to [0,1])
+                    let c = (state_out.chaos.get() + mic_rms * 0.5).min(1.0);
+                    send_changed(&mut last_sent.chaos_mod, c, "chaos");
+                }
+                2 => {
+                    // reverb modulation: boost reverb with mic level
+                    let r = (state_out.reverb_mix.get() + mic_rms * 2.0).min(1.0);
+                    send_changed(&mut last_sent.reverb_mix, r, "rev_mix");
+                }
+                3 => {
+                    // delay feedback modulation: modulate feedback with mic
+                    let d = (state_out.delay_fb.get() + mic_rms * 0.5).min(0.92);
+                    send_changed(&mut last_sent.delay_fb, d, "del_fb");
+                }
+                _ => {}
+            }
+
             // ---- run Pd ----
             let ticks = calculate_ticks(out_channels, data.len() as i32);
-            ctx.process_float(ticks, &[], data);
+            ctx.process_float(ticks, &in_buf, data);
 
             // ---- monitor + record ----
             let mut out_sum_sq = 0.0_f32;
@@ -194,7 +235,74 @@ impl Engine {
         };
         out_stream.play()?;
 
-        let streams = EngineStreams { _out_stream: out_stream, _pd: pd };
+        // ---------- cpal input stream ----------
+        let want_in = std::env::var("TEZETA_INPUT_DEVICE").ok();
+        let input = pick_input(&all_devices, want_in.as_deref()).or_else(|| host.default_input_device());
+
+        let in_stream = if let Some(input_dev) = input {
+            let in_cfg_supported = input_dev.default_input_config().ok();
+            if let Some(in_cfg_sup) = in_cfg_supported {
+                let in_cfg: StreamConfig = in_cfg_sup.clone().into();
+                let _in_ch = in_cfg.channels as usize;
+                if let Ok(name) = input_dev.name() {
+                    tracing::info!("input device: {}", name);
+                }
+
+                let state_in = state.clone();
+                let mic_prod_cb = mic_prod.clone();
+                let input_callback = move |data: &[f32]| {
+                    let gain = state_in.mic_gain.get();
+                    let enabled = state_in.mic_enabled.load(Ordering::Relaxed);
+                    let mut rms = 0.0_f32;
+
+                    for &s in data.iter() {
+                        let g = if enabled { s * gain } else { 0.0 };
+                        if let Some(mut prod) = mic_prod_cb.try_lock() {
+                            let _ = prod.try_push(g);
+                        }
+                        rms += g * g;
+                    }
+
+                    let level = (rms / data.len().max(1) as f32).sqrt();
+                    let cur = state_in.input_level.get();
+                    state_in.input_level.set(cur * 0.85 + level * 0.15);
+                };
+
+                match in_cfg_sup.sample_format() {
+                    SampleFormat::F32 => {
+                        let in_stream = input_dev.build_input_stream(
+                            &in_cfg,
+                            move |data: &[f32], _| input_callback(data),
+                            |e| tracing::error!("input err: {e}"),
+                            None,
+                        )?;
+                        in_stream.play()?;
+                        Some(in_stream)
+                    }
+                    SampleFormat::I16 => {
+                        let cb = input_callback;
+                        let in_stream = input_dev.build_input_stream(
+                            &in_cfg,
+                            move |data: &[i16], _| {
+                                let f: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                                cb(&f);
+                            },
+                            |e| tracing::error!("input err: {e}"),
+                            None,
+                        )?;
+                        in_stream.play()?;
+                        Some(in_stream)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let streams = EngineStreams { _out_stream: out_stream, _in_stream: in_stream, _pd: pd };
         let handle = EngineHandle {
             state,
             recorder,
@@ -234,6 +342,7 @@ struct LastSent {
     bpm: f32,
     mode: f32,
     drum_on: f32,
+    chaos_mod: f32,
 }
 
 const OUTPUT_PRIORITY: &[&str] = &[
@@ -249,6 +358,16 @@ fn pick_output(devs: &[cpal::Device], want: Option<&str>) -> Option<cpal::Device
     for pat in OUTPUT_PRIORITY {
         for d in devs {
             if d.name().map(|n| n.contains(pat)).unwrap_or(false) && ok(d) { return Some(d.clone()); }
+        }
+    }
+    devs.iter().find(|d| ok(d)).cloned()
+}
+
+fn pick_input(devs: &[cpal::Device], want: Option<&str>) -> Option<cpal::Device> {
+    let ok = |d: &cpal::Device| d.default_input_config().is_ok();
+    if let Some(w) = want {
+        for d in devs {
+            if d.name().map(|n| n.contains(w)).unwrap_or(false) && ok(d) { return Some(d.clone()); }
         }
     }
     devs.iter().find(|d| ok(d)).cloned()

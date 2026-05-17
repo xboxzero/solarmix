@@ -57,6 +57,11 @@ pub struct SharedState {
     pub current_step: AtomicU8,
     pub recording: AtomicBool,
 
+    // ---- microphone input ----
+    pub mic_enabled: AtomicBool,      // toggle mic on/off
+    pub mic_gain: AtomicF32,          // 0..4 input gain
+    pub mic_mod: AtomicF32,           // 0=off, 1=chaos, 2=reverb, 3=delay
+
     // ---- snapshot of last 16 qubit coefficients for UI ----
     pub qcoef: [AtomicF32; 16],
 }
@@ -97,6 +102,10 @@ impl SharedState {
             output_level: AtomicF32::new(0.0),
             current_step: AtomicU8::new(0),
             recording: AtomicBool::new(false),
+
+            mic_enabled: AtomicBool::new(false),
+            mic_gain: AtomicF32::new(1.0),
+            mic_mod: AtomicF32::new(0.0),
 
             qcoef: std::array::from_fn(|_| AtomicF32::new(0.0625)),
         })

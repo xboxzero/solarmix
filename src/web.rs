@@ -67,6 +67,10 @@ enum InMsg {
     #[serde(rename = "mode")]  Mode  { value: u8 },
     /// Begin / end WAV recording on the Pi.
     #[serde(rename = "record")] Record { on: bool },
+    /// Microphone enable/disable and gain control.
+    #[serde(rename = "mic")] Mic { enabled: bool, gain: f32 },
+    /// Microphone modulation target (0=off, 1=chaos, 2=reverb, 3=delay).
+    #[serde(rename = "mic_route")] MicRoute { target: u8 },
 }
 
 #[derive(Serialize)]
@@ -180,6 +184,13 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
         }
         InMsg::Record { on } => {
             if on { eng.start_recording(); } else { eng.stop_recording(); }
+        }
+        InMsg::Mic { enabled, gain } => {
+            s.mic_enabled.store(enabled, Ordering::Relaxed);
+            s.mic_gain.set(gain.clamp(0.0, 4.0));
+        }
+        InMsg::MicRoute { target } => {
+            s.mic_mod.set((target.min(3)) as f32);
         }
     }
 }
