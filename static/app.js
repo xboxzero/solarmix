@@ -15,19 +15,31 @@
 import * as THREE from './vendor/three.module.js';
 
 // ----- error surface (Safari hides JS errors otherwise) -----
-window.addEventListener('error', e => {
+function showError(msg) {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:60px;left:20px;right:20px;background:#3a0808;color:#ffeaea;padding:14px;border:1px solid #ff5050;border-radius:6px;font-family:monospace;font-size:12px;z-index:100;white-space:pre-wrap';
-  let msg = '';
-  if (e.error && typeof e.error === 'object') {
-    msg = e.error.stack ? String(e.error.stack) : (e.error.message ? String(e.error.message) : String(e.error));
-  } else if (e.message) {
-    msg = String(e.message);
-  } else {
-    msg = 'Unknown error';
-  }
-  d.textContent = 'JS error: ' + msg;
+  d.textContent = 'JS error: ' + String(msg);
   document.body.appendChild(d);
+}
+
+window.addEventListener('error', e => {
+  let msg = 'Unknown error';
+  if (e && e.error && typeof e.error === 'object') {
+    msg = e.error.stack ? String(e.error.stack) : (e.error.message ? String(e.error.message) : String(e.error));
+  } else if (e && e.message) {
+    msg = String(e.message);
+  } else if (e) {
+    msg = String(e);
+  }
+  showError(msg);
+});
+
+window.addEventListener('unhandledrejection', e => {
+  let msg = 'Unhandled Promise rejection';
+  if (e && e.reason) {
+    msg = e.reason && e.reason.message ? String(e.reason.message) : String(e.reason);
+  }
+  showError(msg);
 });
 
 // =====================================================================
@@ -37,27 +49,56 @@ const wsStatus = document.getElementById('ws-status');
 let ws = null;
 const queued = [];
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.addEventListener('open',  () => { wsStatus.textContent = 'LINKED'; while (queued.length) ws.send(queued.shift()); });
-  ws.addEventListener('close', () => { wsStatus.textContent = 'LOST — RECONNECTING'; setTimeout(connect, 1500); });
-  ws.addEventListener('message', e => { let m; try { m = JSON.parse(e.data); } catch { return; } if (m.type === 'tick') onTick(m); });
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.addEventListener('open',  () => {
+      if (wsStatus) wsStatus.textContent = 'LINKED';
+      while (queued.length) {
+        try { ws.send(queued.shift()); } catch (e) { console.error('WebSocket send error:', e); }
+      }
+    });
+    ws.addEventListener('close', () => {
+      if (wsStatus) wsStatus.textContent = 'LOST — RECONNECTING';
+      setTimeout(connect, 1500);
+    });
+    ws.addEventListener('message', e => {
+      try {
+        let m = JSON.parse(e.data);
+        if (m && m.type === 'tick') onTick(m);
+      } catch (err) {
+        console.error('Message parse error:', err);
+      }
+    });
+  } catch (e) {
+    console.error('WebSocket connection error:', e);
+    if (wsStatus) wsStatus.textContent = 'CONNECTION ERROR';
+  }
 }
 function send(obj) {
-  const s = JSON.stringify(obj);
-  if (ws && ws.readyState === 1) ws.send(s); else queued.push(s);
+  try {
+    const s = JSON.stringify(obj);
+    if (ws && ws.readyState === 1) ws.send(s); else queued.push(s);
+  } catch (e) {
+    console.error('Send error:', e);
+  }
 }
 
 // =====================================================================
 // Three.js scene
 // =====================================================================
 const canvas = document.getElementById('stage');
+if (!canvas) throw new Error('Canvas element not found');
+
 let renderer;
 try {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
 } catch (e) {
   throw new Error('WebGL not supported: ' + (e && e.message ? e.message : String(e)));
 }
+
+if (!renderer) throw new Error('WebGL renderer initialization failed');
+
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0x03060a, 1);
 const scene = new THREE.Scene();

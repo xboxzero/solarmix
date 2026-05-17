@@ -64,9 +64,19 @@
 
 <script type="module" src="app.js"></script>
 <script nomodule>
-  document.body.insertAdjacentHTML('beforeend',
-    '<div style="position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ffd47a;font-family:system-ui;text-align:center;padding:20px;z-index:99">'+
-    'Safari is too old for ES modules.<br>Please update Safari (16.4+) or use a recent browser.</div>');
+  var msg = document.createElement('div');
+  msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ffd47a;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6';
+  msg.innerHTML = 'Browser not supported.<br><br>This app requires Safari 16.4+ or a modern browser.<br><br>Your device is too old. Please use a newer device or browser.';
+  document.body.appendChild(msg);
+</script>
+<script>
+  // Fallback for syntax errors in modern browsers
+  if (!window.requestAnimationFrame) {
+    var msg = document.createElement('div');
+    msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ff6666;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6;font-weight:bold';
+    msg.innerHTML = 'Browser Error<br><br>This browser is not compatible with this app.';
+    document.body.appendChild(msg);
+  }
 </script>
 </body>
 </html>
