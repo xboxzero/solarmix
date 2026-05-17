@@ -403,6 +403,7 @@ pub struct TazetaSynth {
     kebero: KeberoVoice,
     reverb: Reverb,
     delay: Delay,
+    test_phase: f32,
 }
 
 impl TazetaSynth {
@@ -415,6 +416,7 @@ impl TazetaSynth {
             kebero: KeberoVoice::new(sr),
             reverb: Reverb::new(sr),
             delay: Delay::new(1500.0, sr),
+            test_phase: 0.0,
         }
     }
 
@@ -447,12 +449,18 @@ impl TazetaSynth {
     }
 
     pub fn process(&mut self, pitches: &[f32; 4]) -> f32 {
+        // TEMPORARY: Test sine wave at 440 Hz
+        let test_freq = 440.0;
+        let phase_inc = test_freq / self.sr;
+        let test_sine = fast_sin(self.test_phase * 2.0 * PI) * 0.3;
+        self.test_phase = (self.test_phase + phase_inc) % 1.0;
+
         let k = self.krar.process(pitches[0], self.sr) * 2.0;
         let m = self.masinko.process(pitches[1], self.sr) * 2.0;
         let w = self.washint.process(pitches[2]) * 2.0;
         let kb = self.kebero.process(pitches[3]) * 2.0;
 
-        let out = (k + m + w + kb) * 0.25;
+        let out = (k + m + w + kb) * 0.25 + test_sine * 0.5;
 
         let with_delay = self.delay.process(out, 360.0, self.sr);
         self.reverb.process(with_delay)
