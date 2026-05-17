@@ -424,42 +424,74 @@ if (recBtn) {
 // =====================================================================
 const clock = new THREE.Clock();
 let smoothA = 3, smoothB = 2, smoothC = 5;
+let outLevelSmoothed = 0;
 
+let animationRunning = false;
 function animate() {
-  const dt = clock.getDelta();
-  // smooth toward server-reported Lissajous ratios
-  smoothA += (lissA - smoothA) * 0.05;
-  smoothB += (lissB - smoothB) * 0.05;
-  smoothC += (lissC - smoothC) * 0.05;
-  if (Math.abs(smoothA - curve.a) > 0.05 || Math.abs(smoothB - curve.b) > 0.05 || Math.abs(smoothC - curve.c) > 0.05) {
-    curve.a = smoothA; curve.b = smoothB; curve.c = smoothC;
-    rebuildCurve();
-    resampleBuf();
+  try {
+    if (!renderer || !scene || !camera || !clock || !curve || !handles || !tubeMat) {
+      console.warn('animate: missing scene objects, skipping frame');
+      if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(animate);
+      return;
+    }
+
+    const dt = clock.getDelta();
+    // smooth toward server-reported Lissajous ratios
+    smoothA += (lissA - smoothA) * 0.05;
+    smoothB += (lissB - smoothB) * 0.05;
+    smoothC += (lissC - smoothC) * 0.05;
+    if (Math.abs(smoothA - curve.a) > 0.05 || Math.abs(smoothB - curve.b) > 0.05 || Math.abs(smoothC - curve.c) > 0.05) {
+      curve.a = smoothA; curve.b = smoothB; curve.c = smoothC;
+      rebuildCurve();
+      resampleBuf();
+    }
+    // orbit camera
+    const r = 9;
+    camera.position.x = Math.sin(camYaw) * Math.cos(camPitch) * r;
+    camera.position.z = Math.cos(camYaw) * Math.cos(camPitch) * r;
+    camera.position.y = Math.sin(camPitch) * r;
+    camera.lookAt(0, 0, 0);
+
+    // handles ride the curve
+    if (handles && handles.length > 0) {
+      handles.forEach(h => {
+        if (h && h.userData) {
+          h.userData.intensity *= 0.96;
+          positionHandle(h);
+        }
+      });
+    }
+    // tube emissive responds to overall output level (set in onTick)
+    if (tubeMat && typeof outLevelSmoothed === 'number') {
+      tubeMat.emissiveIntensity = 0.25 + Math.max(0, Math.min(1.2, outLevelSmoothed * 1.2));
+    }
+
+    renderer.render(scene, camera);
+
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(animate);
+    }
+  } catch (e) {
+    console.error('animate error:', e);
+    showError('Animation error: ' + (e && e.message ? e.message : String(e)));
   }
-  // orbit camera
-  const r = 9;
-  camera.position.x = Math.sin(camYaw) * Math.cos(camPitch) * r;
-  camera.position.z = Math.cos(camYaw) * Math.cos(camPitch) * r;
-  camera.position.y = Math.sin(camPitch) * r;
-  camera.lookAt(0, 0, 0);
-
-  // handles ride the curve
-  handles.forEach(h => {
-    h.userData.intensity *= 0.96;
-    positionHandle(h);
-  });
-  // tube emissive responds to overall output level (set in onTick)
-  tubeMat.emissiveIntensity = 0.25 + outLevelSmoothed * 1.2;
-
-  renderer.render(scene, camera);
-  requestAnimationFrame(animate);
 }
-animate();
+
+try {
+  if (typeof requestAnimationFrame !== 'undefined') {
+    animationRunning = true;
+    animate();
+  } else {
+    console.error('requestAnimationFrame not supported');
+  }
+} catch (e) {
+  console.error('Failed to start animation:', e);
+  showError('Failed to start animation: ' + (e && e.message ? e.message : String(e)));
+}
 
 // =====================================================================
 // Tick from server
 // =====================================================================
-let outLevelSmoothed = 0;
 function onTick(m) {
   if (!m) return;
 
