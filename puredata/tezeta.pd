@@ -54,9 +54,11 @@
 #X obj 30 350 outlet~ out;
 #X msg 230 50 1 \, 0 1500 30;
 #X obj 30 60 change;
+#X obj 30 95 sel 1;
 #X connect 0 0 16 0;
 #X connect 16 0 2 0;
-#X connect 2 0 15 0;
+#X connect 2 0 17 0;
+#X connect 17 0 15 0;
 #X connect 1 0 3 1;
 #X connect 1 0 8 0;
 #X connect 3 0 4 0;
@@ -88,8 +90,10 @@
 #X obj 250 80 sig~ 1.005;
 #X obj 250 110 *~;
 #X obj 30 60 change;
+#X obj 30 85 sel 1;
 #X connect 0 0 14 0;
-#X connect 14 0 3 0;
+#X connect 14 0 15 0;
+#X connect 15 0 3 0;
 #X connect 3 0 2 0;
 #X connect 1 0 4 0;
 #X connect 1 0 13 0;
@@ -121,8 +125,10 @@
 #X obj 30 400 *~ 0.3;
 #X obj 30 430 outlet~ out;
 #X obj 30 60 change;
+#X obj 30 85 sel 1;
 #X connect 0 0 14 0;
-#X connect 14 0 3 0;
+#X connect 14 0 15 0;
+#X connect 15 0 3 0;
 #X connect 3 0 2 0;
 #X connect 2 0 4 1;
 #X connect 1 0 6 0;
@@ -151,8 +157,10 @@
 #X obj 30 320 *~ 0.7;
 #X obj 30 350 outlet~ out;
 #X obj 30 60 change;
+#X obj 30 85 sel 1;
 #X connect 0 0 12 0;
-#X connect 12 0 3 0;
+#X connect 12 0 13 0;
+#X connect 13 0 3 0;
 #X connect 3 0 2 0;
 #X connect 2 0 4 1;
 #X connect 5 0 4 0;
