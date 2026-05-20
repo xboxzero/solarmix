@@ -63,11 +63,4 @@ impl QubitRouter {
         }
     }
 
-    /// Routing coefficient for (voice, bus), v∈0..4, b∈0..4. Returned in [0..1].
-    /// Mixed with a per-user base routing matrix (1−chaos) * base + chaos * qubit.
-    pub fn coeff(&self, voice: usize, bus: usize) -> f32 {
-        self.coeffs[(voice * 4 + bus) & 0xF]
-    }
-
-    pub fn snapshot_16(&self) -> [f32; 16] { self.coeffs }
 }

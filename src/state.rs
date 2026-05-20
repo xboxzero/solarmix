@@ -14,12 +14,7 @@ impl AtomicF32 {
     #[inline(always)] pub fn set(&self, v: f32) { self.0.store(v.to_bits(), REL); }
 }
 
-/// Qenet modes (Ethiopian pentatonic kiñit).
-/// 1=Tezeta (nostalgic)  2=Bati (lively)  3=Ambassel (heroic)  4=Anchihoye (dramatic)
 pub const MODE_TEZETA: u8 = 1;
-pub const MODE_BATI: u8 = 2;
-pub const MODE_AMBASSEL: u8 = 3;
-pub const MODE_ANCHIHOYE: u8 = 4;
 
 pub struct SharedState {
     // ---- master ----
@@ -54,7 +49,6 @@ pub struct SharedState {
     // ---- meters (RT thread -> UI) ----
     pub input_level: AtomicF32,
     pub output_level: AtomicF32,
-    pub current_step: AtomicU8,
     pub recording: AtomicBool,
 
     // ---- microphone input ----
@@ -100,7 +94,6 @@ impl SharedState {
 
             input_level: AtomicF32::new(0.0),
             output_level: AtomicF32::new(0.0),
-            current_step: AtomicU8::new(0),
             recording: AtomicBool::new(false),
 
             mic_enabled: AtomicBool::new(false),

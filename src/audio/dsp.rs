@@ -16,10 +16,6 @@ fn fast_sin(x: f32) -> f32 {
     }
 }
 
-#[inline]
-fn fast_cos(x: f32) -> f32 {
-    fast_sin(x + PI / 2.0)
-}
 
 /// Sawtooth oscillator in [−1, 1].
 #[inline]
@@ -40,53 +36,62 @@ impl NoiseGen {
     }
 }
 
-/// Linear envelope with attack, sustain, decay.
+/// ASR envelope: attack → sustain (holds at 1.0 while gate is on) → release.
 pub struct Envelope {
     attack_samples: u32,
     release_samples: u32,
     sample_count: u32,
-    is_active: bool,
+    gate: bool,
+    releasing: bool,
+    level: f32,
 }
 
 impl Envelope {
     pub fn new(attack_ms: f32, release_ms: f32, sr: f32) -> Self {
         Self {
-            attack_samples: (attack_ms * sr / 1000.0) as u32,
-            release_samples: (release_ms * sr / 1000.0) as u32,
+            attack_samples: (attack_ms * sr / 1000.0).max(1.0) as u32,
+            release_samples: (release_ms * sr / 1000.0).max(1.0) as u32,
             sample_count: 0,
-            is_active: false,
+            gate: false,
+            releasing: false,
+            level: 0.0,
         }
     }
 
     pub fn trigger(&mut self) {
+        self.gate = true;
+        self.releasing = false;
         self.sample_count = 0;
-        self.is_active = true;
     }
 
     pub fn release(&mut self) {
-        self.sample_count = self.attack_samples;
+        self.gate = false;
+        if self.level > 0.0 {
+            self.releasing = true;
+            self.sample_count = 0;
+        }
     }
 
     pub fn next(&mut self) -> f32 {
-        if !self.is_active {
-            return 0.0;
-        }
-
-        let val = if self.sample_count < self.attack_samples {
-            self.sample_count as f32 / self.attack_samples as f32
-        } else {
-            let release_pos = self.sample_count - self.attack_samples;
-            if release_pos < self.release_samples {
-                1.0 - (release_pos as f32 / self.release_samples as f32)
+        if self.gate {
+            if self.sample_count < self.attack_samples {
+                self.level = self.sample_count as f32 / self.attack_samples as f32;
+                self.sample_count += 1;
             } else {
-                self.is_active = false;
-                0.0
+                self.level = 1.0;
             }
-        };
-
-        self.sample_count += 1;
-        val
+        } else if self.releasing {
+            if self.sample_count < self.release_samples {
+                self.level = 1.0 - (self.sample_count as f32 / self.release_samples as f32);
+                self.sample_count += 1;
+            } else {
+                self.level = 0.0;
+                self.releasing = false;
+            }
+        }
+        self.level
     }
+
 }
 
 /// One-pole lowpass filter.
@@ -110,23 +115,15 @@ impl Lowpass {
 /// Highpass filter (complement of lowpass).
 pub struct Highpass {
     lp: Lowpass,
-    prev_input: f32,
-    prev_output: f32,
 }
 
 impl Highpass {
     pub fn new(cutoff_hz: f32, sr: f32) -> Self {
-        Self {
-            lp: Lowpass::new(cutoff_hz, sr),
-            prev_input: 0.0,
-            prev_output: 0.0,
-        }
+        Self { lp: Lowpass::new(cutoff_hz, sr) }
     }
 
     pub fn process(&mut self, input: f32) -> f32 {
-        let lp_out = self.lp.process(input);
-        let hp = input - lp_out;
-        hp
+        input - self.lp.process(input)
     }
 }
 
@@ -172,7 +169,7 @@ struct Allpass {
 }
 
 impl Reverb {
-    pub fn new(sr: f32) -> Self {
+    pub fn new(_sr: f32) -> Self {
         let lengths = [1116, 1188, 1277, 1356];
         let allpass_lens = [225, 556];
         Self {
@@ -253,9 +250,8 @@ impl Delay {
         Self { buf: vec![0.0; len.max(1)], write_pos: 0, feedback: 0.4, mix: 0.3 }
     }
 
-    pub fn set_params(&mut self, time_ms: f32, feedback: f32, sr: f32) {
+    pub fn set_params(&mut self, _time_ms: f32, feedback: f32, _sr: f32) {
         self.feedback = feedback.clamp(0.0, 0.95);
-        self.mix = 0.3;
     }
 
     pub fn process(&mut self, input: f32, delay_ms: f32, sr: f32) -> f32 {
@@ -274,8 +270,7 @@ impl Delay {
 pub struct KrarVoice {
     phase: f32,
     env: Envelope,
-    lp1: Lowpass,
-    lp2: Lowpass,
+    lp: Lowpass,
     vcf: Bandpass,
 }
 
@@ -284,8 +279,7 @@ impl KrarVoice {
         Self {
             phase: 0.0,
             env: Envelope::new(10.0, 1500.0, sr),
-            lp1: Lowpass::new(4000.0, sr),
-            lp2: Lowpass::new(4000.0, sr),
+            lp: Lowpass::new(4000.0, sr),
             vcf: Bandpass::new(2000.0, 2.0, sr),
         }
     }
@@ -298,10 +292,10 @@ impl KrarVoice {
         let saw = sawtooth(self.phase);
         self.phase = (self.phase + phase_inc) % 1.0;
 
-        let filtered = self.lp1.process(saw);
-        let filtered2 = self.vcf.process(filtered);
+        let filtered = self.lp.process(saw);
+        let shaped = self.vcf.process(filtered);
 
-        filtered2 * self.env.next()
+        shaped * self.env.next()
     }
 }
 
@@ -336,28 +330,37 @@ impl MasinkoVoice {
     }
 }
 
-/// Washint voice: filtered noise.
+/// Washint voice: filtered noise shaped by pitch.
 pub struct WashintVoice {
+    sr: f32,
     noise: NoiseGen,
     env: Envelope,
     bp1: Bandpass,
     bp2: Bandpass,
+    last_pitch: f32,
 }
 
 impl WashintVoice {
     pub fn new(sr: f32) -> Self {
         Self {
+            sr,
             noise: NoiseGen::new(12345),
             env: Envelope::new(50.0, 600.0, sr),
             bp1: Bandpass::new(800.0, 6.0, sr),
             bp2: Bandpass::new(1200.0, 8.0, sr),
+            last_pitch: 0.0,
         }
     }
 
     pub fn trigger(&mut self) { self.env.trigger(); }
     pub fn release(&mut self) { self.env.release(); }
 
-    pub fn process(&mut self, _pitch_hz: f32) -> f32 {
+    pub fn process(&mut self, pitch_hz: f32) -> f32 {
+        if (pitch_hz - self.last_pitch).abs() > 1.0 {
+            self.bp1 = Bandpass::new(pitch_hz, 6.0, self.sr);
+            self.bp2 = Bandpass::new(pitch_hz * 1.5, 8.0, self.sr);
+            self.last_pitch = pitch_hz;
+        }
         let noise = self.noise.next();
         let bp1 = self.bp1.process(noise);
         let bp2 = self.bp2.process(noise * 0.5);
@@ -394,7 +397,7 @@ impl KeberoVoice {
     }
 }
 
-/// Master synthesizer combining all voices.
+/// Master synthesizer combining all voices through a routing matrix.
 pub struct TazetaSynth {
     sr: f32,
     krar: KrarVoice,
@@ -403,7 +406,9 @@ pub struct TazetaSynth {
     kebero: KeberoVoice,
     reverb: Reverb,
     delay: Delay,
-    test_phase: f32,
+    dark_lp: Lowpass,
+    route: [f32; 16],
+    delay_time_ms: f32,
 }
 
 impl TazetaSynth {
@@ -416,7 +421,9 @@ impl TazetaSynth {
             kebero: KeberoVoice::new(sr),
             reverb: Reverb::new(sr),
             delay: Delay::new(1500.0, sr),
-            test_phase: 0.0,
+            dark_lp: Lowpass::new(600.0, sr),
+            route: [0.0; 16],
+            delay_time_ms: 360.0,
         }
     }
 
@@ -445,24 +452,38 @@ impl TazetaSynth {
     }
 
     pub fn set_delay(&mut self, time_ms: f32, feedback: f32) {
+        self.delay_time_ms = time_ms;
         self.delay.set_params(time_ms, feedback, self.sr);
     }
 
+    pub fn set_route(&mut self, matrix: [f32; 16]) {
+        self.route = matrix;
+    }
+
     pub fn process(&mut self, pitches: &[f32; 4]) -> f32 {
-        // TEMPORARY: Test sine wave at 440 Hz
-        let test_freq = 440.0;
-        let phase_inc = test_freq / self.sr;
-        let test_sine = fast_sin(self.test_phase * 2.0 * PI) * 0.3;
-        self.test_phase = (self.test_phase + phase_inc) % 1.0;
+        let voices = [
+            self.krar.process(pitches[0], self.sr),
+            self.masinko.process(pitches[1], self.sr),
+            self.washint.process(pitches[2]),
+            self.kebero.process(pitches[3]),
+        ];
 
-        let k = self.krar.process(pitches[0], self.sr) * 2.0;
-        let m = self.masinko.process(pitches[1], self.sr) * 2.0;
-        let w = self.washint.process(pitches[2]) * 2.0;
-        let kb = self.kebero.process(pitches[3]) * 2.0;
+        // Mix voices into 4 buses: dry, reverb, delay, dark
+        let mut dry = 0.0_f32;
+        let mut rev_in = 0.0_f32;
+        let mut dly_in = 0.0_f32;
+        let mut dark_in = 0.0_f32;
+        for v in 0..4 {
+            dry     += voices[v] * self.route[v * 4];
+            rev_in  += voices[v] * self.route[v * 4 + 1];
+            dly_in  += voices[v] * self.route[v * 4 + 2];
+            dark_in += voices[v] * self.route[v * 4 + 3];
+        }
 
-        let out = (k + m + w + kb) * 0.25 + test_sine * 0.5;
+        let rev_out = self.reverb.process(rev_in);
+        let dly_out = self.delay.process(dly_in, self.delay_time_ms, self.sr);
+        let dark_out = self.dark_lp.process(dark_in);
 
-        let with_delay = self.delay.process(out, 360.0, self.sr);
-        self.reverb.process(with_delay)
+        dry + rev_out + dly_out + dark_out
     }
 }

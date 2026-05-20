@@ -77,7 +77,6 @@ impl Engine {
         let mut synth = TazetaSynth::new(out_sr);
         let mut router = QubitRouter::new();
         let mut last_gate = [false; 4];
-        let mut last_sent_gates = [0.0_f32; 4];
         let mut block_seconds = 256.0 / out_sr;
         let out_ch_us = out_channels.max(1);
         let mic_cons_cb = mic_cons.clone();
@@ -86,24 +85,34 @@ impl Engine {
             let frames = data.len() / out_ch_us;
 
             // Step qubit router
-            router.step(state_out.chaos.get(), block_seconds);
+            let chaos = state_out.chaos.get();
+            router.step(chaos, block_seconds);
+
+            // Write qubit coefficients to shared state for UI
+            for i in 0..16 {
+                state_out.qcoef[i].set(router.coeffs[i]);
+            }
+
+            // Blend base routing matrix with qubit-driven routing
+            let mut route = [0.0_f32; 16];
+            for i in 0..16 {
+                let base = state_out.route[i].get();
+                route[i] = base * (1.0 - chaos) + router.coeffs[i] * chaos;
+            }
+            synth.set_route(route);
 
             // Update gate/pitch signals (from web UI or Lissajous control)
             for v in 0..4 {
                 let gate = state_out.voice_gate[v].get() > 0.5;
-                let pitch = state_out.voice_pitch[v].get();
 
                 if gate != last_gate[v] {
                     if gate {
-                        tracing::debug!("Voice {} triggered at {} Hz", v, pitch);
                         synth.trigger_voice(v);
                     } else {
-                        tracing::debug!("Voice {} released", v);
                         synth.release_voice(v);
                     }
                     last_gate[v] = gate;
                 }
-                // (pitch is read per-sample during synth.process)
             }
 
             // Update FX parameters
@@ -117,12 +126,9 @@ impl Engine {
             );
 
             // Microphone input
-            let mut in_buf = vec![0.0_f32; frames];
             if let Some(mut cons) = mic_cons_cb.try_lock() {
-                for f in 0..frames {
-                    if let Some(s) = cons.try_pop() {
-                        in_buf[f] = s;
-                    }
+                for _ in 0..frames {
+                    let _ = cons.try_pop();
                 }
             }
 
@@ -130,10 +136,6 @@ impl Engine {
             let mic_rms = state_out.input_level.get();
             let mod_target = state_out.mic_mod.get() as u8;
             match mod_target {
-                1 => {
-                    let c = (state_out.chaos.get() + mic_rms * 0.5).min(1.0);
-                    // Apply chaos modulation to routing matrix (similar to Pd version)
-                }
                 2 => {
                     let r = (state_out.reverb_mix.get() + mic_rms * 2.0).min(1.0);
                     synth.set_reverb(r, state_out.reverb_size.get());
@@ -159,13 +161,11 @@ impl Engine {
                 let sample = synth.process(&pitches);
                 let out_sample = sample * master_vol;
 
-                // Stereo output
                 data[frame * out_ch_us] = out_sample;
                 if out_ch_us >= 2 {
                     data[frame * out_ch_us + 1] = out_sample;
                 }
 
-                // Recording
                 if state_out.recording.load(Ordering::Relaxed) {
                     recorder_cb.push(out_sample, out_sample);
                 }
@@ -179,12 +179,7 @@ impl Engine {
             }
             let rms = (out_sum_sq / frames as f32).sqrt();
             let cur = state_out.output_level.get();
-            let new_level = cur * 0.85 + rms * 0.15;
-            state_out.output_level.set(new_level);
-
-            if new_level > 0.01 {
-                tracing::debug!("Output level: {:.4}", new_level);
-            }
+            state_out.output_level.set(cur * 0.85 + rms * 0.15);
 
             block_seconds = frames as f32 / out_sr;
         };
