@@ -30,9 +30,19 @@ async function initAudio() {
   }
 }
 
-// Resume audio on first user interaction (browser autoplay policy)
-function resumeAudio() {
-  if (audioReady) synth.resume();
+// Resume audio on first user interaction (browser autoplay policy).
+// Safari may block AudioContext creation outside a gesture, so retry init here.
+async function resumeAudio() {
+  if (!audioReady) {
+    try {
+      await synth.init();
+      audioReady = true;
+    } catch (e) {
+      console.error('Audio init retry failed:', e);
+      return;
+    }
+  }
+  synth.resume();
 }
 
 // ----- error surface (Safari hides JS errors otherwise) -----

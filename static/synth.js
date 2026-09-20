@@ -282,7 +282,7 @@ class WashintVoice {
   createNoiseBuffer(ctx, duration) {
     const rate = ctx.sampleRate;
     const length = rate * duration;
-    const buffer = ctx.createAudioBuffer({ numberOfChannels: 1, length, sampleRate: rate });
+    const buffer = ctx.createBuffer(1, length, rate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < length; i++) {
       data[i] = Math.random() * 2 - 1;
@@ -345,7 +345,7 @@ class KeberoVoice {
   createNoiseBuffer(ctx, duration) {
     const rate = ctx.sampleRate;
     const length = rate * duration;
-    const buffer = ctx.createAudioBuffer({ numberOfChannels: 1, length, sampleRate: rate });
+    const buffer = ctx.createBuffer(1, length, rate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < length; i++) {
       data[i] = Math.random() * 2 - 1;
