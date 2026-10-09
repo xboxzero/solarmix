@@ -4,6 +4,8 @@
 > Pure Data is the engine. Safari is the controller. Sound is Pi-only.
 > The UI is a 3D Lissajous curve you touch to play, with a node-graph
 > patchbay whose 16 sends are entangled by a multiplied 4-qubit router.
+>
+> (https://xboxzero.github.io/solarmix/)
 
 ```
 Safari (touch, no audio)              Raspberry Pi 5
