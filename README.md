@@ -53,6 +53,20 @@ chaos = 0 ─► routing follows the base matrix exactly
 chaos = 1 ─► routing follows the qubit-entangled coefficients
 ```
 
+## Run in the browser (GitHub Pages)
+
+`static/` also works as a plain static site with no Pi: when it's opened from
+`*.github.io`, from `file://`, with `?standalone`, or when no `/ws` server
+answers, `static/engine.js` stands in for the Rust server (qubit router, qenet
+pitch mapping, kebero groove, recording) and `static/synth.js` plays the four
+voices through Web Audio. REC downloads the take as an audio file.
+
+To publish: **Settings → Pages → Source: GitHub Actions**, then push to
+`master` (or run the *Deploy to GitHub Pages* workflow by hand). The workflow
+in `.github/workflows/pages.yml` uploads `static/` as the site.
+
+Try it locally: `cd static && python3 -m http.server` → `http://localhost:8000/?standalone`.
+
 ## Hardware
 
 - Raspberry Pi 5

@@ -1,133 +1,138 @@
 // tezeta Web Audio synth engine
-// Replicates the four Pd voice generators: krar, masinko, washint, kebero
+// Browser port of the four DSP voices (krar, masinko, washint, kebero) with
+// the same 4×4 voice → bus patchbay as the Rust engine: DRY · REV · DLY · DARK.
 
 class TezetaSynth {
   constructor() {
+    this.ctx = null;
     this.audioContext = null;
     this.masterGain = null;
+    this.analyser = null;
+    this.recordDest = null;
     this.voices = [null, null, null, null];
-    this.voiceGains = [null, null, null, null];
+    this.sendGains = [];            // 16 GainNodes, row-major [v*4 + b]
+    this.revReturn = null;
+    this.delay = null;
+    this.delayFeedback = null;
     this.isInitialized = false;
-    this.sampleRate = 44100;
-    this.queuedVoices = [];
-
-    // Filter state for each voice (qubit-driven send levels)
-    this.sendLevels = new Float32Array(16); // 4 voices × 4 buses
-    this.busFilters = [null, null, null, null]; // dry, rev, dly, dark
+    this._levelBuf = null;
   }
 
   async init() {
     if (this.isInitialized) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('Web Audio not supported');
+    const ctx = new AC({ latencyHint: 'interactive' });
+    this.ctx = this.audioContext = ctx;
 
-    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-      sampleRate: 44100,
-      latencyHint: 'interactive',
-    });
-    this.sampleRate = this.audioContext.sampleRate;
-
-    // Master output chain
-    this.masterGain = this.audioContext.createGain();
+    // master → compressor → analyser → speakers (+ recorder tap)
+    this.masterGain = ctx.createGain();
     this.masterGain.gain.value = 0.7;
-    this.masterGain.connect(this.audioContext.destination);
-
-    // Create bus filters (dry pass-through, reverb, delay, dark)
-    this.busFilters[0] = this.audioContext.createGain(); // dry
-    this.busFilters[1] = this.createReverbBus();
-    this.busFilters[2] = this.createDelayBus();
-    this.busFilters[3] = this.createDarkBus();
-
-    for (let i = 0; i < 4; i++) {
-      this.busFilters[i].connect(this.masterGain);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -10; comp.ratio.value = 4;
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    this._levelBuf = new Float32Array(this.analyser.fftSize);
+    this.masterGain.connect(comp);
+    comp.connect(this.analyser);
+    this.analyser.connect(ctx.destination);
+    if (ctx.createMediaStreamDestination) {
+      this.recordDest = ctx.createMediaStreamDestination();
+      comp.connect(this.recordDest);
     }
 
-    // Create voice generators and routing
+    // ---- buses ----
+    const dry = ctx.createGain();
+    dry.connect(this.masterGain);
+
+    const rev = ctx.createGain();
+    const conv = ctx.createConvolver();
+    conv.buffer = this._impulse(2.6, 2.2);
+    this.revReturn = ctx.createGain();
+    this.revReturn.gain.value = 0.25 * 3;
+    rev.connect(conv); conv.connect(this.revReturn); this.revReturn.connect(this.masterGain);
+
+    const dly = ctx.createGain();
+    this.delay = ctx.createDelay(2.0);
+    this.delay.delayTime.value = 0.36;
+    this.delayFeedback = ctx.createGain();
+    this.delayFeedback.gain.value = 0.4;
+    const dlyTone = ctx.createBiquadFilter();
+    dlyTone.type = 'lowpass'; dlyTone.frequency.value = 3200;
+    dly.connect(this.delay);
+    this.delay.connect(dlyTone);
+    dlyTone.connect(this.delayFeedback);
+    this.delayFeedback.connect(this.delay);
+    dlyTone.connect(this.masterGain);
+
+    const dark = ctx.createGain();
+    const darkLp = ctx.createBiquadFilter();
+    darkLp.type = 'lowpass'; darkLp.frequency.value = 700; darkLp.Q.value = 2;
+    const darkDrive = ctx.createWaveShaper();
+    darkDrive.curve = this._softClip(2.5);
+    dark.connect(darkDrive); darkDrive.connect(darkLp); darkLp.connect(this.masterGain);
+
+    const buses = [dry, rev, dly, dark];
+
+    // ---- voices, each fanned out to the 4 buses ----
     const voiceClasses = [KrarVoice, MasinkoVoice, WashintVoice, KeberoVoice];
-    for (let i = 0; i < 4; i++) {
-      const voiceGain = this.audioContext.createGain();
-      voiceGain.gain.value = 0.25;
-      this.voiceGains[i] = voiceGain;
-
-      // Route to all 4 buses via send levels
+    for (let v = 0; v < 4; v++) {
+      const out = ctx.createGain();
+      out.gain.value = 0.6;
       for (let b = 0; b < 4; b++) {
-        const sendGain = this.audioContext.createGain();
-        sendGain.gain.value = this.sendLevels[i * 4 + b];
-        voiceGain.connect(sendGain);
-        sendGain.connect(this.busFilters[b]);
+        const s = ctx.createGain();
+        s.gain.value = 0;
+        out.connect(s); s.connect(buses[b]);
+        this.sendGains[v * 4 + b] = s;
       }
-
-      // Create voice and connect to voice gain
-      this.voices[i] = new voiceClasses[i](this.audioContext, voiceGain);
+      this.voices[v] = new voiceClasses[v](ctx, out);
     }
 
     this.isInitialized = true;
-    console.log('Tezeta synth initialized:', this.audioContext.state);
   }
 
-  createReverbBus() {
-    const bus = this.audioContext.createGain();
-    bus.gain.value = 0.25;
-    // Simple reverb using convolver (placeholder - just a gain for now)
-    return bus;
-  }
-
-  createDelayBus() {
-    const bus = this.audioContext.createGain();
-    const delay = this.audioContext.createDelay(5);
-    const feedback = this.audioContext.createGain();
-    delay.delayTime.value = 0.5;
-    feedback.gain.value = 0.4;
-    bus.connect(delay);
-    delay.connect(feedback);
-    feedback.connect(delay);
-    delay.connect(bus);
-    return bus;
-  }
-
-  createDarkBus() {
-    const bus = this.audioContext.createGain();
-    const filter = this.audioContext.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 800;
-    bus.connect(filter);
-    filter.connect(bus);
-    return bus;
-  }
-
-  setGate(voice, gate) {
-    if (!this.isInitialized) {
-      this.queuedVoices.push({ voice, gate });
-      return;
+  _impulse(seconds, decay) {
+    const rate = this.ctx.sampleRate, len = Math.floor(rate * seconds);
+    const buf = this.ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
     }
-    if (gate) {
-      this.voices[voice]?.noteOn();
-    } else {
-      this.voices[voice]?.noteOff();
-    }
+    return buf;
   }
 
-  setPitch(voice, hz) {
-    if (!this.isInitialized) return;
-    this.voices[voice]?.setPitch(hz);
+  _softClip(k) {
+    const n = 1024, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); }
+    return c;
   }
 
-  setMaster(level) {
+  _ramp(param, value, tc = 0.03) {
     if (!this.isInitialized) return;
-    this.masterGain.gain.setTargetAtTime(level, this.audioContext.currentTime, 0.05);
+    param.setTargetAtTime(value, this.ctx.currentTime, tc);
   }
 
-  setSendLevel(voice, bus, level) {
-    if (!this.isInitialized) return;
-    this.sendLevels[voice * 4 + bus] = level;
-    // TODO: update send gain nodes
+  noteOn(voice, hz, velocity = 1) { if (this.isInitialized) this.voices[voice]?.noteOn(hz, velocity); }
+  noteOff(voice) { if (this.isInitialized) this.voices[voice]?.noteOff(); }
+  setPitch(voice, hz) { if (this.isInitialized) this.voices[voice]?.setPitch(hz); }
+  setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
+  setSendLevel(voice, bus, level) { const g = this.sendGains[voice * 4 + bus]; if (g) this._ramp(g.gain, level, 0.05); }
+  setReverbMix(mix) { if (this.revReturn) this._ramp(this.revReturn.gain, mix * 3, 0.05); }
+  setDelayFeedback(fb) { if (this.delayFeedback) this._ramp(this.delayFeedback.gain, Math.min(0.92, fb), 0.05); }
+  setDelayTime(sec) { if (this.delay) this._ramp(this.delay.delayTime, sec, 0.1); }
+
+  // RMS of the master output, 0..1
+  outputLevel() {
+    if (!this.analyser) return 0;
+    const b = this._levelBuf;
+    if (this.analyser.getFloatTimeDomainData) this.analyser.getFloatTimeDomainData(b);
+    let s = 0; for (let i = 0; i < b.length; i++) s += b[i] * b[i];
+    return Math.sqrt(s / b.length);
   }
 
   // Resume audio on user interaction (required by browser autoplay policy)
   async resume() {
-    if (this.audioContext) {
-      if (this.audioContext.state === 'suspended') {
-        await this.audioContext.resume();
-      }
-    }
+    if (this.ctx && this.ctx.state !== 'running') await this.ctx.resume();
   }
 }
 
@@ -135,238 +140,147 @@ class TezetaSynth {
 // Voice generators
 // ============================================================================
 
+function noiseBuffer(ctx, seconds) {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+// krar — plucked lyre: bright saw + square through a decaying lowpass.
 class KrarVoice {
   constructor(ctx, output) {
     this.ctx = ctx;
-    this.output = output;
-
-    // Oscillator chain: phasor → -0.5 → *2 (triangle) → filter → vcf
-    this.osc = ctx.createOscillator();
-    this.osc.type = 'sine'; // we'll modulate to create triangle-like wave
-
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = 'lowpass';
-    lowpass.frequency.value = 4000;
-
-    const vcf = ctx.createBiquadFilter();
-    vcf.type = 'highpass';
-    vcf.frequency.value = 2000;
-
-    const envelope = this.createEnvelope(ctx);
-    const gain = ctx.createGain();
-    gain.gain.value = 0.5;
-
-    this.osc.connect(lowpass);
-    lowpass.connect(vcf);
-    vcf.connect(envelope);
-    envelope.connect(gain);
-    gain.connect(output);
-
-    this.osc.start(ctx.currentTime);
-    this.envelope = envelope;
-    this.vcf = vcf;
+    this.osc = ctx.createOscillator(); this.osc.type = 'sawtooth';
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'square'; this.osc2.detune.value = 7;
+    const mix2 = ctx.createGain(); mix2.gain.value = 0.3;
+    this.lp = ctx.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = 400; this.lp.Q.value = 4;
+    this.env = ctx.createGain(); this.env.gain.value = 0;
+    this.osc.connect(this.lp); this.osc2.connect(mix2); mix2.connect(this.lp);
+    this.lp.connect(this.env); this.env.connect(output);
+    this.osc.start(); this.osc2.start();
   }
-
-  createEnvelope(ctx) {
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    return gain;
-  }
-
   setPitch(hz) {
-    this.osc.frequency.setTargetAtTime(hz, this.ctx.currentTime, 0.01);
+    const t = this.ctx.currentTime;
+    this.osc.frequency.setTargetAtTime(hz, t, 0.005);
+    this.osc2.frequency.setTargetAtTime(hz, t, 0.005);
   }
-
-  noteOn() {
-    this.envelope.gain.setTargetAtTime(1, this.ctx.currentTime, 0.01);
-    this.vcf.frequency.setTargetAtTime(5000, this.ctx.currentTime, 0.05);
+  noteOn(hz, vel) {
+    const t = this.ctx.currentTime;
+    if (hz) { this.osc.frequency.setValueAtTime(hz, t); this.osc2.frequency.setValueAtTime(hz, t); }
+    const g = this.env.gain, f = this.lp.frequency;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0.5 * vel, t + 0.004);
+    g.setTargetAtTime(0, t + 0.004, 0.45);
+    f.cancelScheduledValues(t); f.setValueAtTime(5500, t);
+    f.setTargetAtTime(500, t, 0.18);
   }
-
-  noteOff() {
-    this.envelope.gain.setTargetAtTime(0, this.ctx.currentTime, 0.15);
-    this.vcf.frequency.setTargetAtTime(1000, this.ctx.currentTime, 0.15);
-  }
+  noteOff() { this.env.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2); }
 }
 
+// masinko — bowed single-string fiddle: detuned saws, vibrato, nasal body.
 class MasinkoVoice {
   constructor(ctx, output) {
     this.ctx = ctx;
-    this.output = output;
-
-    this.osc = ctx.createOscillator();
-    this.osc.type = 'sine';
-
-    const vcf = ctx.createBiquadFilter();
-    vcf.type = 'lowpass';
-    vcf.frequency.value = 2200;
-    vcf.Q.value = 8;
-
-    const envelope = this.createEnvelope(ctx);
-    const gain = ctx.createGain();
-    gain.gain.value = 0.4;
-
-    this.osc.connect(vcf);
-    vcf.connect(envelope);
-    envelope.connect(gain);
-    gain.connect(output);
-
-    this.osc.start(ctx.currentTime);
-    this.envelope = envelope;
-    this.osc2 = ctx.createOscillator();
-    this.osc2.type = 'sine';
-    this.osc2.frequency.value = 1; // 0.5% detuning
-    this.osc2.connect(vcf);
-    this.osc2.start(ctx.currentTime);
+    this.osc = ctx.createOscillator(); this.osc.type = 'sawtooth';
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 9;
+    const vib = ctx.createOscillator(); vib.frequency.value = 5.5;
+    const vibDepth = ctx.createGain(); vibDepth.gain.value = 14; // cents
+    vib.connect(vibDepth); vibDepth.connect(this.osc.detune); vibDepth.connect(this.osc2.detune);
+    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 1100; body.Q.value = 3; body.gain.value = 9;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 1;
+    this.env = ctx.createGain(); this.env.gain.value = 0;
+    const lvl = ctx.createGain(); lvl.gain.value = 0.22;
+    this.osc.connect(body); this.osc2.connect(body); body.connect(lp); lp.connect(this.env);
+    this.env.connect(lvl); lvl.connect(output);
+    this.osc.start(); this.osc2.start(); vib.start();
   }
-
-  createEnvelope(ctx) {
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    return gain;
-  }
-
   setPitch(hz) {
-    this.osc.frequency.setTargetAtTime(hz, this.ctx.currentTime, 0.01);
-    this.osc2.frequency.setTargetAtTime(hz * 1.005, this.ctx.currentTime, 0.01);
+    const t = this.ctx.currentTime;
+    this.osc.frequency.setTargetAtTime(hz, t, 0.04);
+    this.osc2.frequency.setTargetAtTime(hz, t, 0.04);
   }
-
-  noteOn() {
-    this.envelope.gain.setTargetAtTime(1, this.ctx.currentTime, 0.05);
+  noteOn(hz, vel) {
+    if (hz) this.setPitch(hz);
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(vel, t, 0.06);
   }
-
   noteOff() {
-    this.envelope.gain.setTargetAtTime(0, this.ctx.currentTime, 0.8);
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(0, t, 0.35);
   }
 }
 
+// washint — bamboo flute: soft triangle tone plus breath noise at the pitch.
 class WashintVoice {
   constructor(ctx, output) {
     this.ctx = ctx;
-    this.output = output;
-
-    const noise = ctx.createBufferSource();
-    noise.buffer = this.createNoiseBuffer(ctx, 0.1);
-    noise.loop = true;
-
-    const bp1 = ctx.createBiquadFilter();
-    bp1.type = 'bandpass';
-    bp1.frequency.value = 800;
-    bp1.Q.value = 6;
-
-    const bp2 = ctx.createBiquadFilter();
-    bp2.type = 'bandpass';
-    bp2.frequency.value = 1200;
-    bp2.Q.value = 8;
-
-    const vcf = ctx.createBiquadFilter();
-    vcf.type = 'highpass';
-    vcf.frequency.value = 1000;
-
-    const envelope = this.createEnvelope(ctx);
-    const gain = ctx.createGain();
-    gain.gain.value = 0.3;
-
-    noise.connect(bp1);
-    bp1.connect(vcf);
-    bp2.connect(vcf);
-    vcf.connect(envelope);
-    envelope.connect(gain);
-    gain.connect(output);
-
-    noise.start(ctx.currentTime);
-    this.noise = noise;
-    this.envelope = envelope;
-    this.vcf = vcf;
+    this.osc = ctx.createOscillator(); this.osc.type = 'triangle';
+    const vib = ctx.createOscillator(); vib.frequency.value = 4.8;
+    const vibDepth = ctx.createGain(); vibDepth.gain.value = 10;
+    vib.connect(vibDepth); vibDepth.connect(this.osc.detune);
+    const noise = ctx.createBufferSource(); noise.buffer = noiseBuffer(ctx, 2); noise.loop = true;
+    this.bp = ctx.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.frequency.value = 880; this.bp.Q.value = 12;
+    const breath = ctx.createGain(); breath.gain.value = 0.9;
+    const tone = ctx.createGain(); tone.gain.value = 0.45;
+    this.env = ctx.createGain(); this.env.gain.value = 0;
+    this.osc.connect(tone); tone.connect(this.env);
+    noise.connect(this.bp); this.bp.connect(breath); breath.connect(this.env);
+    this.env.connect(output);
+    this.osc.start(); vib.start(); noise.start();
   }
-
-  createNoiseBuffer(ctx, duration) {
-    const rate = ctx.sampleRate;
-    const length = rate * duration;
-    const buffer = ctx.createBuffer(1, length, rate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    return buffer;
-  }
-
   setPitch(hz) {
-    // Washint doesn't have pitch control, but we could modulate the filters
+    const t = this.ctx.currentTime, f = hz * 2; // flute sits an octave up
+    this.osc.frequency.setTargetAtTime(f, t, 0.03);
+    this.bp.frequency.setTargetAtTime(f, t, 0.03);
   }
-
-  noteOn() {
-    this.envelope.gain.setTargetAtTime(1, this.ctx.currentTime, 0.05);
-    this.vcf.frequency.setTargetAtTime(5000, this.ctx.currentTime, 0.05);
+  noteOn(hz, vel) {
+    if (hz) this.setPitch(hz);
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(0.6 * vel, t, 0.07);
   }
-
   noteOff() {
-    this.envelope.gain.setTargetAtTime(0, this.ctx.currentTime, 0.6);
-    this.vcf.frequency.setTargetAtTime(1000, this.ctx.currentTime, 0.6);
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(0, t, 0.25);
   }
 }
 
+// kebero — hand drum: pitch-dropping sub thump + filtered noise slap.
+// Each hit spawns short-lived nodes so overlapping hits ring out naturally.
 class KeberoVoice {
   constructor(ctx, output) {
-    this.ctx = ctx;
-    this.output = output;
-
-    const noise = ctx.createBufferSource();
-    noise.buffer = this.createNoiseBuffer(ctx, 0.1);
-    noise.loop = true;
-
-    const subOsc = ctx.createOscillator();
-    subOsc.type = 'sine';
-    subOsc.frequency.value = 80;
-
-    const hip = ctx.createBiquadFilter();
-    hip.type = 'highpass';
-    hip.frequency.value = 200;
-
-    const lop = ctx.createBiquadFilter();
-    lop.type = 'lowpass';
-    lop.frequency.value = 6000;
-
-    const envelope = this.createEnvelope(ctx);
-    const gain = ctx.createGain();
-    gain.gain.value = 0.7;
-
-    noise.connect(hip);
-    subOsc.connect(hip);
-    hip.connect(lop);
-    lop.connect(envelope);
-    envelope.connect(gain);
-    gain.connect(output);
-
-    noise.start(ctx.currentTime);
-    subOsc.start(ctx.currentTime);
-    this.envelope = envelope;
+    this.ctx = ctx; this.output = output;
+    this.noise = noiseBuffer(ctx, 0.5);
+    this.pitch = 110;
   }
+  setPitch(hz) { this.pitch = hz; }
+  noteOn(hz, vel = 1, when) {
+    const ctx = this.ctx, t = when ?? ctx.currentTime;
+    const base = Math.max(45, Math.min(160, (hz || this.pitch) / 2));
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(base * 2.2, t);
+    o.frequency.exponentialRampToValueAtTime(base, t + 0.08);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.9 * vel, t + 0.003);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o.connect(og); og.connect(this.output);
+    o.start(t); o.stop(t + 0.5);
 
-  createNoiseBuffer(ctx, duration) {
-    const rate = ctx.sampleRate;
-    const length = rate * duration;
-    const buffer = ctx.createBuffer(1, length, rate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i++) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    return buffer;
+    const n = ctx.createBufferSource(); n.buffer = this.noise;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.9;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.5 * vel, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    n.connect(bp); bp.connect(ng); ng.connect(this.output);
+    n.start(t); n.stop(t + 0.15);
   }
-
-  setPitch(hz) {
-    // Kebero is a drum, pitch control could modulate sub-osc
-  }
-
-  noteOn() {
-    this.envelope.gain.setTargetAtTime(1, this.ctx.currentTime, 0.02);
-  }
-
-  noteOff() {
-    this.envelope.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4);
-  }
+  noteOff() {}
 }
 
-// Export for use in app.js
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { TezetaSynth };
-}
+window.TezetaSynth = TezetaSynth;

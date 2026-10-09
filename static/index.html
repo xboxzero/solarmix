@@ -6,12 +6,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>tezeta</title>
+<meta name="description" content="tezeta — Ethiopian-mode Lissajous touch synth with a qubit-entangled patchbay.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <canvas id="stage"></canvas>
 <svg id="patchbay" aria-hidden="true"></svg>
+<button id="start" type="button">TAP TO START<small>sound plays from this device · turn up the volume</small></button>
 
 <header class="hud-top">
   <div class="title">tezeta <span class="sub">ኢትዮጵያ kiñit synth</span></div>
@@ -63,6 +65,7 @@
 </footer>
 
 <script src="synth.js"></script>
+<script src="engine.js"></script>
 <script type="module" src="app.js"></script>
 <script nomodule>
   var msg = document.createElement('div');
