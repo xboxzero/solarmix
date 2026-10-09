@@ -5,12 +5,16 @@
 //   the qubit router on the server — the geometry breathes with them.
 // • Touch on the curve to play. The hit point is projected onto the closest
 //   parametric t, mapped to a 5-note window of the current qenet mode, and
-//   sent up over WebSocket as { type:'lissajous', voice, t, intensity }.
+//   handled as { type:'lissajous', voice, t, intensity }.
 // • The SVG patchbay overlay shows the 16 qubit-driven send levels as wires
 //   between voice nodes (left) and bus nodes (right). Drag a wire to bias the
 //   base routing matrix.
 //
-// No audio is ever played in the browser — the Pi is the only output.
+// Runs two ways:
+// • Linked: served by the Rust binary on the Pi; control goes over the WS.
+// • Standalone: hosted statically (e.g. GitHub Pages) or with no reachable
+//   server — LocalEngine (engine.js) stands in for the Pi and the Web Audio
+//   synth (synth.js) plays in the browser.
 
 import * as THREE from './vendor/three.module.js';
 
@@ -18,6 +22,7 @@ import * as THREE from './vendor/three.module.js';
 // Web Audio Synth
 // =====================================================================
 const synth = new TezetaSynth();
+const engine = new LocalEngine(synth);
 let audioReady = false;
 
 async function initAudio() {
@@ -42,7 +47,9 @@ async function resumeAudio() {
       return;
     }
   }
-  synth.resume();
+  await synth.resume();
+  const gate = document.getElementById('start');
+  if (gate && synth.ctx && synth.ctx.state === 'running') gate.classList.add('hidden');
 }
 
 // ----- error surface (Safari hides JS errors otherwise) -----
@@ -70,10 +77,16 @@ window.addEventListener('load', () => {
   initAudio().catch(console.error);
 });
 
-// Resume audio on user interaction
-document.addEventListener('click', resumeAudio, { once: true });
-document.addEventListener('touchstart', resumeAudio, { once: true });
-document.addEventListener('keydown', resumeAudio, { once: true });
+const startBtn = document.getElementById('start');
+if (startBtn) startBtn.addEventListener('click', () => startBtn.classList.add('hidden'));
+
+// Resume audio on user interaction (every gesture until the context runs —
+// iOS sometimes needs more than one).
+for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  document.addEventListener(ev, () => {
+    if (!audioReady || !synth.ctx || synth.ctx.state !== 'running') resumeAudio();
+  }, true);
+}
 
 window.addEventListener('unhandledrejection', e => {
   let msg = 'Unhandled Promise rejection';
@@ -84,24 +97,39 @@ window.addEventListener('unhandledrejection', e => {
 });
 
 // =====================================================================
-// WebSocket
+// WebSocket (only when served by the Pi) + standalone fallback
 // =====================================================================
 const wsStatus = document.getElementById('ws-status');
+const params = new URLSearchParams(location.search);
+// Static hosts have no /ws endpoint — don't even try.
+const STANDALONE = params.has('standalone')
+  || location.protocol === 'file:'
+  || location.hostname.endsWith('github.io');
 let ws = null;
+let linked = false;
+let everLinked = false;
 const queued = [];
+
+function setStatus(text) { if (wsStatus) wsStatus.textContent = text; }
+
 function connect() {
+  if (STANDALONE) { setStatus('STANDALONE'); return; }
   try {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.addEventListener('open',  () => {
-      if (wsStatus) wsStatus.textContent = 'LINKED';
+      linked = everLinked = true;
+      setStatus('LINKED');
       while (queued.length) {
         try { ws.send(queued.shift()); } catch (e) { console.error('WebSocket send error:', e); }
       }
     });
     ws.addEventListener('close', () => {
-      if (wsStatus) wsStatus.textContent = 'LOST — RECONNECTING';
-      setTimeout(connect, 1500);
+      linked = false;
+      queued.length = 0;
+      // Never reached a server: run standalone, keep probing quietly.
+      setStatus(everLinked ? 'LOST — RECONNECTING' : 'STANDALONE');
+      setTimeout(connect, everLinked ? 1500 : 10000);
     });
     ws.addEventListener('message', e => {
       try {
@@ -117,9 +145,14 @@ function connect() {
   }
 }
 function send(obj) {
+  // Recording happens on the Pi when linked, in the browser otherwise.
+  if (!(obj.type === 'record' && linked)) {
+    try { engine.handle(obj); } catch (e) { console.error('Engine error:', e); }
+  }
+  if (STANDALONE || (!linked && !everLinked)) return;
   try {
     const s = JSON.stringify(obj);
-    if (ws && ws.readyState === 1) ws.send(s); else queued.push(s);
+    if (ws && ws.readyState === 1) ws.send(s); else if (queued.length < 64) queued.push(s);
   } catch (e) {
     console.error('Send error:', e);
   }
@@ -282,19 +315,7 @@ function strikeAt(pointerId, clientX, clientY, intensity) {
   handles[voice].userData.intensity = intensity;
   positionHandle(handles[voice]);
 
-  // Map curve parameter t to pitch (5-note window, ~qenet mode)
-  const baseNote = 440; // A4
-  const notes = [0, 2, 3, 5, 7]; // pentatonic intervals in semitones
-  const noteIdx = Math.round(t * (notes.length - 1));
-  const interval = notes[noteIdx] / 12; // convert to octaves
-  const hz = baseNote * Math.pow(2, interval);
-
-  // Trigger synth voice
-  if (audioReady) {
-    synth.setGate(voice, true);
-    synth.setPitch(voice, hz);
-  }
-
+  // Pitch mapping (qenet mode × root) lives in LocalEngine / the Pi server.
   send({ type: 'lissajous', voice, t, intensity });
 }
 
@@ -303,12 +324,6 @@ function release(pointerId) {
   if (voice === undefined) return;
   activePointers.delete(pointerId);
   handles[voice].userData.intensity = 0.0;
-
-  // Release synth voice
-  if (audioReady) {
-    synth.setGate(voice, false);
-  }
-
   send({ type: 'voice', voice, gate: false });
 }
 
@@ -441,7 +456,6 @@ if (masterEl) {
     if (!isNaN(v)) {
       send({ type: 'set', id: 'master', value: v });
       if (masterVal) masterVal.textContent = Math.round(v * 100) + '%';
-      if (audioReady) synth.setMaster(v);
     }
   });
 }
@@ -601,6 +615,21 @@ function onTick(m) {
       b.classList.toggle('on', !isNaN(btnMode) && btnMode === m.mode);
     });
   }
+}
+
+// Local engine clock: qubit drift, routing, kebero groove. When no Pi is
+// linked it also feeds the UI the same `tick` the server would send.
+let lastStep = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  engine.step(Math.min(0.2, (now - lastStep) / 1000));
+  lastStep = now;
+  if (!linked) onTick(engine.tick());
+}, 33);
+
+if (STANDALONE || !everLinked) {
+  const hint = document.querySelector('.hud-side .hint');
+  if (hint) hint.innerHTML = 'Touch on the curve to play.<br>Voices: <b>krar · masinko · washint · kebero</b>.<br>Drag off the curve to orbit.';
 }
 
 connect();
