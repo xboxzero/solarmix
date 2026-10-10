@@ -1,6 +1,7 @@
 // morlam Web Audio synth engine
-// Four mor lam voices (khaen, phin, so, klong) plus a ching cymbal, through
-// the same 4×4 voice → bus patchbay as the Rust engine: DRY · REV · DLY · DARK.
+// Four mor lam voices (khaen, phin, so, klong) plus a ching cymbal. Each voice
+// runs through its own GAIN → AMP insert, then a 4×4 send matrix into the
+// parallel W-D-W mixer and IR stage of the FX rig (fx.js).
 
 class MorlamSynth {
   constructor() {
@@ -11,9 +12,7 @@ class MorlamSynth {
     this.recordDest = null;
     this.voices = [null, null, null, null];
     this.sendGains = [];            // 16 GainNodes, row-major [v*4 + b]
-    this.revReturn = null;
-    this.delay = null;
-    this.delayFeedback = null;
+    this.fx = null;                 // FxRig
     this.isInitialized = false;
     this._levelBuf = null;
   }
@@ -41,48 +40,18 @@ class MorlamSynth {
       comp.connect(this.recordDest);
     }
 
-    // ---- buses ----
-    const dry = ctx.createGain();
-    dry.connect(this.masterGain);
+    this.fx = new FxRig(ctx, this.masterGain);
 
-    const rev = ctx.createGain();
-    const conv = ctx.createConvolver();
-    conv.buffer = this._impulse(2.6, 2.2);
-    this.revReturn = ctx.createGain();
-    this.revReturn.gain.value = 0.25 * 3;
-    rev.connect(conv); conv.connect(this.revReturn); this.revReturn.connect(this.masterGain);
-
-    const dly = ctx.createGain();
-    this.delay = ctx.createDelay(2.0);
-    this.delay.delayTime.value = 0.36;
-    this.delayFeedback = ctx.createGain();
-    this.delayFeedback.gain.value = 0.4;
-    const dlyTone = ctx.createBiquadFilter();
-    dlyTone.type = 'lowpass'; dlyTone.frequency.value = 3200;
-    dly.connect(this.delay);
-    this.delay.connect(dlyTone);
-    dlyTone.connect(this.delayFeedback);
-    this.delayFeedback.connect(this.delay);
-    dlyTone.connect(this.masterGain);
-
-    const dark = ctx.createGain();
-    const darkLp = ctx.createBiquadFilter();
-    darkLp.type = 'lowpass'; darkLp.frequency.value = 700; darkLp.Q.value = 2;
-    const darkDrive = ctx.createWaveShaper();
-    darkDrive.curve = this._softClip(2.5);
-    dark.connect(darkDrive); darkDrive.connect(darkLp); darkLp.connect(this.masterGain);
-
-    const buses = [dry, rev, dly, dark];
-
-    // ---- voices, each fanned out to the 4 buses ----
+    // ---- voices → own amp insert → 4 sends into the mixer channels ----
     const voiceClasses = [KhaenVoice, PhinVoice, SoVoice, KlongVoice];
     for (let v = 0; v < 4; v++) {
       const out = ctx.createGain();
       out.gain.value = 0.6;
+      out.connect(this.fx.amps[v].input);
       for (let b = 0; b < 4; b++) {
         const s = ctx.createGain();
         s.gain.value = 0;
-        out.connect(s); s.connect(buses[b]);
+        this.fx.amps[v].output.connect(s); s.connect(this.fx.inputs[b]);
         this.sendGains[v * 4 + b] = s;
       }
       this.voices[v] = new voiceClasses[v](ctx, out);
@@ -90,22 +59,6 @@ class MorlamSynth {
     }
 
     this.isInitialized = true;
-  }
-
-  _impulse(seconds, decay) {
-    const rate = this.ctx.sampleRate, len = Math.floor(rate * seconds);
-    const buf = this.ctx.createBuffer(2, len, rate);
-    for (let ch = 0; ch < 2; ch++) {
-      const d = buf.getChannelData(ch);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-    }
-    return buf;
-  }
-
-  _softClip(k) {
-    const n = 1024, c = new Float32Array(n);
-    for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); }
-    return c;
   }
 
   _ramp(param, value, tc = 0.03) {
@@ -139,9 +92,9 @@ class MorlamSynth {
   }
   setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
   setSendLevel(voice, bus, level) { const g = this.sendGains[voice * 4 + bus]; if (g) this._ramp(g.gain, level, 0.05); }
-  setReverbMix(mix) { if (this.revReturn) this._ramp(this.revReturn.gain, mix * 3, 0.05); }
-  setDelayFeedback(fb) { if (this.delayFeedback) this._ramp(this.delayFeedback.gain, Math.min(0.92, fb), 0.05); }
-  setDelayTime(sec) { if (this.delay) this._ramp(this.delay.delayTime, sec, 0.1); }
+  setFx(path, value) { if (this.fx) this.fx.set(path, value); }
+  loadIRFile(file) { return this.fx ? this.fx.loadIRFile(file) : Promise.reject(new Error('audio not started')); }
+  channelLevels() { return this.fx ? this.fx.channelLevels() : [0, 0, 0, 0]; }
 
   // RMS of the master output, 0..1
   outputLevel() {
