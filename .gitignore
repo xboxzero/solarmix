@@ -1,5 +1,3 @@
-/target
-Cargo.lock
-recordings/*.wav
 .DS_Store
 *.swp
+node_modules/

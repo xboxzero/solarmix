@@ -3,21 +3,17 @@
 //
 // • The Lissajous curve (x = sin(a·t+δ), y = sin(b·t), z = sin(c·t+φ)) lives in
 //   Three.js as a TubeGeometry. Three 'a', 'b', 'c' ratios are entangled with
-//   the qubit router on the server — the geometry breathes with them.
+//   the qubit router in engine.js — the geometry breathes with them.
 // • Touch on the curve to play. The hit point is projected onto the closest
 //   parametric t, mapped to a 5-note window of the current lai, and played
 //   as { type:'note', voice, midi, hz, velocity }.
 // • The keyboard lays the current lai out over three octaves; every pitch is
 //   tuned to the selected well temperament (tuning.js).
 // • The SVG patchbay overlay shows the 16 qubit-driven send levels as wires
-//   between voice nodes (left) and bus nodes (right). Drag a wire to bias the
-//   base routing matrix.
+//   between voice nodes (right) and bus nodes (left).
 //
-// Runs two ways:
-// • Linked: served by the Rust binary on the Pi; control goes over the WS.
-// • Standalone: hosted statically (e.g. GitHub Pages) or with no reachable
-//   server — LocalEngine (engine.js) stands in for the Pi and the Web Audio
-//   synth (synth.js) plays in the browser.
+// Everything runs in the browser: LocalEngine (engine.js) holds the state and
+// the MorlamSynth (synth.js) plays through Web Audio. No server needed.
 
 import * as THREE from './vendor/three.module.js';
 
@@ -102,65 +98,11 @@ window.addEventListener('unhandledrejection', e => {
 });
 
 // =====================================================================
-// WebSocket (only when served by the Pi) + standalone fallback
+// Control: every UI action is a message to the local engine
 // =====================================================================
-const wsStatus = document.getElementById('ws-status');
-const params = new URLSearchParams(location.search);
-// Static hosts have no /ws endpoint — don't even try.
-const STANDALONE = params.has('standalone')
-  || location.protocol === 'file:'
-  || location.hostname.endsWith('github.io');
-let ws = null;
-let linked = false;
-let everLinked = false;
-const queued = [];
-
-function setStatus(text) { if (wsStatus) wsStatus.textContent = text; }
-
-function connect() {
-  if (STANDALONE) { setStatus('STANDALONE'); return; }
-  try {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.addEventListener('open',  () => {
-      linked = everLinked = true;
-      setStatus('LINKED');
-      while (queued.length) {
-        try { ws.send(queued.shift()); } catch (e) { console.error('WebSocket send error:', e); }
-      }
-    });
-    ws.addEventListener('close', () => {
-      linked = false;
-      queued.length = 0;
-      // Never reached a server: run standalone, keep probing quietly.
-      setStatus(everLinked ? 'LOST — RECONNECTING' : 'STANDALONE');
-      setTimeout(connect, everLinked ? 1500 : 10000);
-    });
-    ws.addEventListener('message', e => {
-      try {
-        let m = JSON.parse(e.data);
-        if (m && m.type === 'tick') onTick(m);
-      } catch (err) {
-        console.error('Message parse error:', err);
-      }
-    });
-  } catch (e) {
-    console.error('WebSocket connection error:', e);
-    if (wsStatus) wsStatus.textContent = 'CONNECTION ERROR';
-  }
-}
+const audioStatus = document.getElementById('status');
 function send(obj) {
-  // Recording happens on the Pi when linked, in the browser otherwise.
-  if (!(obj.type === 'record' && linked)) {
-    try { engine.handle(obj); } catch (e) { console.error('Engine error:', e); }
-  }
-  if (STANDALONE || (!linked && !everLinked)) return;
-  try {
-    const s = JSON.stringify(obj);
-    if (ws && ws.readyState === 1) ws.send(s); else if (queued.length < 64) queued.push(s);
-  } catch (e) {
-    console.error('Send error:', e);
-  }
+  try { engine.handle(obj); } catch (e) { console.error('Engine error:', e); }
 }
 
 // =====================================================================
@@ -346,8 +288,7 @@ function strikeAt(pointerId, clientX, clientY, intensity) {
   handles[voice].userData.intensity = intensity;
   positionHandle(handles[voice]);
 
-  // Lai × temperament pitch mapping lives in LocalEngine + tuning.js; the
-  // Pi just receives the resulting pitch.
+  // Lai × temperament pitch mapping lives in LocalEngine + tuning.js.
   const { midi, hz } = engine.pitchFor(t, intensity);
   send({ type: 'note', voice, midi, hz, velocity: intensity });
 }
@@ -550,8 +491,6 @@ if (recBtn) {
 // =====================================================================
 const keyVal = $('key-val');
 function afterRetune() {
-  // Keep the Pi's root (drone + drum pitch) in step with the browser tuning.
-  send({ type: 'set', id: 'root', value: engine.root });
   if (keyVal) keyVal.textContent = (Tuning.transpose > 0 ? '+' : Tuning.transpose < 0 ? '−' : '±') + Math.abs(Tuning.transpose);
   const scaleVal = $('scale-val');
   if (scaleVal) {
@@ -748,14 +687,12 @@ try {
 }
 
 // =====================================================================
-// Tick from server
+// HUD refresh from the engine snapshot
 // =====================================================================
-function onTick(m) {
+function updateHud(m) {
   if (!m) return;
 
-  const inBar = $('in-bar');
   const outBar = $('out-bar');
-  if (inBar) inBar.style.width = Math.min(100, (m.in_level || 0) * 600) + '%';
   if (outBar) outBar.style.width = Math.min(100, (m.out_level || 0) * 600) + '%';
 
   const bpmVal = $('bpm-val');
@@ -775,47 +712,21 @@ function onTick(m) {
   if (m.liss_c !== undefined) lissC = m.liss_c;
   if (m.qcoef) updateWires(m.qcoef);
 
-  // sync master + chaos sliders without triggering input events
-  if (masterEl && masterVal && m.master !== undefined) {
-    if (Math.abs(parseFloat(masterEl.value) - m.master) > 0.01) {
-      masterEl.value = m.master;
-      masterVal.textContent = Math.round(m.master * 100) + '%';
-    }
+  // drum + rec buttons follow the engine (REC stops itself if recording fails)
+  if (drumBtn && m.drum_on !== undefined) drumBtn.classList.toggle('on', m.drum_on);
+  if (recBtn && m.recording !== undefined && recording !== m.recording) {
+    recording = m.recording;
+    recBtn.classList.toggle('on', recording);
   }
 
-  // sync drum + rec + mode buttons
-  if (drumBtn && m.drum_on !== undefined) drumBtn.classList.toggle('on', m.drum_on);
-  if (recBtn && m.recording !== undefined) {
-    if (recBtn.classList.contains('on') !== m.recording) {
-      recording = m.recording;
-      recBtn.classList.toggle('on', recording);
-    }
-  }
-  if (m.mode !== undefined) {
-    if (m.mode !== engine.mode && m.mode >= 1 && m.mode <= LAI_COUNT) {
-      engine.handle({ type: 'mode', value: m.mode });
-      afterRetune();
-    }
-    document.querySelectorAll('#modes button').forEach(b => {
-      const btnMode = parseInt(b.dataset.mode, 10);
-      b.classList.toggle('on', !isNaN(btnMode) && btnMode === m.mode);
-    });
-  }
+  if (audioStatus) audioStatus.textContent = synth.ctx && synth.ctx.state === 'running' ? 'AUDIO ON' : 'STANDBY';
 }
 
-// Local engine clock: qubit drift, routing, kebero groove. When no Pi is
-// linked it also feeds the UI the same `tick` the server would send.
+// Engine clock: qubit drift, routing, klong + ching groove, HUD refresh.
 let lastStep = performance.now();
 setInterval(() => {
   const now = performance.now();
   engine.step(Math.min(0.2, (now - lastStep) / 1000));
   lastStep = now;
-  if (!linked) onTick(engine.tick());
+  updateHud(engine.snapshot());
 }, 33);
-
-if (STANDALONE || !everLinked) {
-  const hint = document.querySelector('.hud-side .hint');
-  if (hint) hint.innerHTML = 'Play the keyboard (mouse, touch or <b>Z…/</b> &amp; <b>Q…Y</b>) or touch the curve.<br>Voices: <b>khaen · phin · so · klong</b>.<br>Drag off the curve to orbit.';
-}
-
-connect();

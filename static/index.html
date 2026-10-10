@@ -21,7 +21,6 @@
 <header class="hud-top panel">
   <div class="title">MORLAM<span class="sub">หมอลำ · khaen machine</span></div>
   <div class="meters">
-    <div class="meter"><span id="in-bar"></span></div>
     <div class="meter"><span id="out-bar"></span></div>
   </div>
   <div class="master">
@@ -29,7 +28,7 @@
     <input id="master" type="range" min="0" max="1" step="0.001" value="0.7">
     <div id="master-val" class="lcd">70%</div>
   </div>
-  <div class="status lcd" id="ws-status">connecting…</div>
+  <div class="status lcd" id="status">STANDBY</div>
 </header>
 
 <aside class="hud-side panel">
@@ -47,7 +46,7 @@
     <div><span class="lbl">LISS a:b:c</span><span id="liss-val">1 : 1 : 1</span></div>
     <div><span class="lbl">SCALE</span><span id="scale-val">A C D E G</span></div>
   </div>
-  <div class="hint">Play the keyboard (mouse, touch or <b>Z…/</b> &amp; <b>Q…Y</b>) or touch the curve.<br>Drag off the curve to orbit.</div>
+  <div class="hint">Play the keyboard (mouse, touch or <b>Z…/</b> &amp; <b>Q…Y</b>) or touch the curve.<br>Voices: <b>khaen · phin · so · klong</b>.<br>Drag off the curve to orbit.</div>
 </aside>
 
 <footer class="hud-bot panel">

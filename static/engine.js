@@ -1,9 +1,9 @@
-// morlam local engine — the browser-side twin of the Rust server.
+// morlam engine — all synth state, in the browser.
 //
-// Holds the same parameter state, runs the 4-qubit tensor-product router,
-// maps Lissajous touches and keyboard keys to well-tempered lai pitches
-// (tuning.js), sequences the klong + ching groove and records the output. When no Pi is reachable (e.g. on GitHub Pages) it
-// also produces the `tick` messages the UI would otherwise get over the WS.
+// Holds the parameters, runs the 4-qubit tensor-product router, maps
+// Lissajous touches and keyboard keys to well-tempered lai pitches
+// (tuning.js), sequences the klong + ching groove, records the output and
+// hands the UI a snapshot of everything to draw.
 
 // Mor lam groove, eighth notes over two bars of 4/4: klong (drum) on the
 // beats with pushes, ching (small cymbals) answering on every off-beat —
@@ -221,12 +221,10 @@ class LocalEngine {
     this.recording = false;
   }
 
-  // Same shape as the server's WS `tick` message.
-  tick() {
+  // Everything the HUD needs to draw, ~30×/s.
+  snapshot() {
     const q = Array.from(this.router.coeffs);
     return {
-      type: 'tick',
-      in_level: 0,
       out_level: this.outLevel,
       recording: this.recording,
       drum_on: this.drumOn,
