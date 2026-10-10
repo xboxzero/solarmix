@@ -264,16 +264,13 @@ function buildPatchbay() {
   const below = rectOf('.hud-bot');
   const top = (above ? above.bottom : 80) + 30;
   const bot = Math.max(top + 90, (below ? below.top : h - 260) - 46);
-  const ys = [0, 1, 2, 3].map(i => top + (bot - top) * i / 3);
+  const nB = CHANNELS.length;
   voicePts.length = 0; busPts.length = 0; wireEls.length = 0;
-
-  for (let i = 0; i < 4; i++) {
-    voicePts[i] = { x: xR, y: ys[i] };
-    busPts[i]   = { x: xL, y: ys[i] };
-  }
+  for (let i = 0; i < 4; i++) voicePts[i] = { x: xR, y: top + (bot - top) * i / 3 };
+  for (let i = 0; i < nB; i++) busPts[i] = { x: xL, y: top + (bot - top) * i / (nB - 1) };
   // wires first so nodes draw on top
   for (let v = 0; v < 4; v++) {
-    for (let b = 0; b < 4; b++) {
+    for (let b = 0; b < nB; b++) {
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('fill', 'none');
       path.setAttribute('stroke', '#ff5a00');
@@ -294,7 +291,7 @@ function buildPatchbay() {
     dot.setAttribute('fill', color);
     svg.appendChild(dot);
     const t = document.createElementNS(SVG_NS, 'text');
-    t.setAttribute('x', p.x); t.setAttribute('y', p.y + 28);
+    t.setAttribute('x', p.x); t.setAttribute('y', p.y + 22);
     t.setAttribute('fill', color);
     t.setAttribute('font-family', '"IBM Plex Mono", ui-monospace, monospace');
     t.setAttribute('font-size', '9');
@@ -305,22 +302,25 @@ function buildPatchbay() {
   };
   for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#1d1d1b');
   const busLabels = CHANNEL_NAMES;
-  for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#7a7770');
+  for (let i = 0; i < nB; i++) drawNode(busPts[i], busLabels[i], '#7a7770');
 }
 window.addEventListener('resize', buildPatchbay);
 buildPatchbay();
 
-function updateWires(qcoef) {
+// sends: keys rig, row-major [voice * CHANNELS.length + channel]
+function updateWires(sends) {
   let idx = 0;
+  const nB = CHANNELS.length;
   for (let v = 0; v < 4; v++) {
-    for (let b = 0; b < 4; b++) {
+    for (let b = 0; b < nB; b++) {
       const a = voicePts[v], c = busPts[b];
       const mid = (a.x + c.x) * 0.5;
       const d = `M${a.x},${a.y} C${mid},${a.y} ${mid},${c.y} ${c.x},${c.y}`;
       const w = wireEls[idx++];
       w.setAttribute('d', d);
-      w.setAttribute('opacity', String(0.15 + qcoef[v*4 + b] * 0.85));
-      w.setAttribute('stroke-width', String(0.5 + qcoef[v*4 + b] * 2.2));
+      const k = sends[v * nB + b] || 0;
+      w.setAttribute('opacity', String(0.1 + k * 0.85));
+      w.setAttribute('stroke-width', String(0.5 + k * 2.2));
     }
   }
 }
@@ -397,7 +397,7 @@ if (recBtn) {
 // =====================================================================
 const rackEl = $('rack');
 const rack = rackEl ? buildRack(rackEl, { engine, synth, send }) : null;
-const fxBtn = $('fx-btn'), drumsBtn = $('drums-btn');
+const pageBtns = document.querySelectorAll('.ctrls [data-page]');
 function placeRack() {
   // the rack fills the space between the top bar and the bottom console
   const top = document.querySelector('.hud-top'), bot = document.querySelector('.hud-bot');
@@ -405,20 +405,16 @@ function placeRack() {
   rackEl.style.top = (top ? top.getBoundingClientRect().bottom + 6 : 70) + 'px';
   rackEl.style.bottom = (bot ? window.innerHeight - bot.getBoundingClientRect().top + 6 : 220) + 'px';
 }
-if (fxBtn && rackEl) {
-  let page = 'fx';
-  const sync = () => {
-    fxBtn.classList.toggle('on', !rackEl.hidden && page === 'fx');
-    if (drumsBtn) drumsBtn.classList.toggle('on', !rackEl.hidden && page === 'drums');
-  };
-  // Effects / Drums buttons open the rack on their page, or close it if already there
+if (rackEl && rack) {
+  let page = 'keys';
+  const sync = () => pageBtns.forEach(b => b.classList.toggle('on', !rackEl.hidden && b.dataset.page === page));
+  // each button opens the rack on its page, or closes it if already there
   const open = p => {
-    rackEl.hidden = !rackEl.hidden && page === p ? true : false;
+    rackEl.hidden = !rackEl.hidden && page === p;
     page = p; rack.show(p); placeRack(); sync();
   };
-  fxBtn.addEventListener('click', () => open('fx'));
-  if (drumsBtn) drumsBtn.addEventListener('click', () => open('drums'));
-  rackEl.addEventListener('click', e => { const t = e.target.closest('.tab'); if (t) { page = t.textContent.startsWith('Drum') ? 'drums' : 'fx'; sync(); } });
+  pageBtns.forEach(b => b.addEventListener('click', () => open(b.dataset.page)));
+  rackEl.addEventListener('click', e => { const t = e.target.closest('.tab'); if (t) { page = t.dataset.page; sync(); } });
   new MutationObserver(sync).observe(rackEl, { attributes: true, attributeFilter: ['hidden'] });
   window.addEventListener('resize', placeRack);
   window.addEventListener('keydown', e => { if (e.key === 'Escape') rackEl.hidden = true; });

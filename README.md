@@ -2,10 +2,11 @@
 
 > A mor lam synth that runs entirely in your browser — no server, no install.
 > Play it from a built-in well-tempered pentatonic keyboard or by touching
-> the world's submarine fibre-optic cables on a 3D globe, through a
-> hand-controlled FX rack (gain, amp, modulation, a parallel wet-dry-wet
-> mixer with phase shifters and drive, IR simulation) and a step-sequenced
-> drum machine. Minimal industrial look: flat warm grey, hairlines, one
+> the world's submarine fibre-optic cables on a 3D globe, plus a
+> step-sequenced drum machine, each with its own hand-controlled FX rig
+> (pre-amp EQ, amp + cabinet simulator, a six-channel parallel wet-dry-wet
+> mixer with eight reverbs and six delays, a manual signal network, IR
+> simulation). Minimal industrial look: flat warm grey, hairlines, one
 > orange accent.
 >
 > **Play:** https://xboxzero.github.io/solarmix/
@@ -78,42 +79,46 @@ the five notes of the current lai. The struck cable lights up in the voice's
 colour and its name appears in the side panel. Drag anywhere off the cables to
 turn the globe; left alone it drifts slowly.
 
-## FX rack
+## FX rigs
 
-Press **Effects** to open the effects rack. Everything in it is manual:
+The keys (keyboard + globe voices) and the drum machine each have their **own
+complete effects rig** with independent settings. Open them with **Keys FX**
+and **Drum FX** in the bottom bar (or the tabs in the rack). Each rig:
+
+```
+source ─► PRE-AMP EQ ─► AMP ─► CAB        one chain per source (4 voices / 6 drum tracks)
+       ─► SIGNAL NETWORK: every source → every channel, by hand
+       ─► six parallel channels, wet · dry · wet:
+            REV A · DLY A │ DRY │ DLY B · REV B │ MOD
+            + FX → FX feeds (mod → delays/reverbs, delays → reverbs)
+       ─► each channel: fader · pan · mute · solo · meter
+       ─► IR SIM ─► rig output ─► master
+```
+
+| Section | Controls |
+| --- | --- |
+| **1 Pre-amp EQ** | Input gain, high-pass, low-pass, low shelf (freq/gain), low-mid and high-mid bands (freq/gain/Q), high shelf (freq/gain), on/off, with a live response curve |
+| **2 Amp simulator** | Model (Clean, Tube warm, Crunch, Lead hi-gain, Bass, Fuzz), drive, master; tone stack (bass, mid, treble, presence); cabinet (1×12 open, 1×12 closed, 2×12, 4×12, bass 1×15, off) with mic position (off-axis ↔ on-axis). Models are roughly level-matched |
+| **3 Modulation** | Chorus / flanger / phaser for the MOD channel: rate, depth, feedback |
+| **4 Mixer** | **REV A / REV B**: Room, Chamber, Hall, Cathedral, Plate, Spring, Gated or Reverse, with size, decay, pre-delay, tone, low cut. **DLY A / DLY B**: Digital, Tape echo, Analog (BBD), Ping-pong, Multi-tap or Slapback, with sync + note value (1/2 … 1/16, dotted, triplet) or free time, feedback, tone, wow. Each reverb and delay has a **phase shifter** insert (rate, depth, feedback, mix). **DRY**: Clean / Low gain / Hi gain drive and a compressor. **MOD**: output of section 3. Every channel has its own fader, pan, mute, solo and meter |
+| **5 Signal network** | *Sources → channels*: a knob for every source into every channel. *FX → FX feeds*: send a channel's processed signal into another (e.g. a delay into a reverb) |
+| **6 IR simulation & output** | Cabinet/room impulse (built-in or your own WAV/AIFF), dry ⇄ IR mix, IR level, rig output level |
+
+All controls are manual:
 
 - **Knobs:** drag up/down *or* left/right (hold Shift for fine moves), scroll
   to nudge, double-click to reset, or click the value to type an exact number.
   Arrow keys work when a knob has focus.
 - **Faders:** click anywhere on the track to jump there, or drag.
 
-```
-voice ─► GAIN ─► AMP ─► SEND MATRIX ─┬─► WET L  reverb → phase shifter ──┐
-         (insert chain per voice)     ├─► DRY    drive → compressor ───────┤
-                                      ├─► WET R  delay → phase shifter ───┼─► IR SIM ─► master
-                                      └─► MOD    chorus/flanger/phaser ───┘
-```
-
-| Unit | Controls |
-| --- | --- |
-| **GAIN** | INPUT (0…+30 dB), DRIVE, CLIP (soft / hard / fuzz), ON |
-| **AMP** | BASS, MID, TREBLE, PRESENCE (±dB), LEVEL, ON |
-| **MOD** | TYPE (chorus / flanger / phaser), RATE, DEPTH, FEEDBACK, ON |
-| **MIXER** | Four parallel channels, each with its own fader, pan, mute, solo and meter. **WET L**: 100% wet reverb (SIZE, DECAY, PRE-delay, TONE) into a **phase shifter** (ON, RATE, DEPTH, FEEDBACK, MIX). **DRY**: a drive stage — CLEAN, LOW GAIN (soft overdrive) or HI GAIN (tightened, two-stage, mid-scooped) with GAIN, TONE, LEVEL — then a COMPRESSOR (ON, THRESHOLD, RATIO). **WET R**: 100% wet delay (TIME, FEEDBACK, TONE, SYNC to a dotted 8th at the tempo) into its own **phase shifter**, sweeping opposite to WET L's. **MOD**: the 100% wet output of the Modulation unit. |
-| **SEND MATRIX** | How much of each voice goes into each channel (16 knobs) |
-| **IR SIM** | The last stage: a convolution impulse response, either built in (CAB 1×12 / 2×12 / 4×12, small room, hall, plate, spring) or your own file (**LOAD IR…**, any WAV/AIFF the browser can decode), with MIX (dry ⇄ IR) and LEVEL |
-
-Wet and dry are separate channels, not one mix knob. Default pans spread
-them wet-left / dry-center / wet-right.
-
-**CHAOS** starts at 0, so the sends follow the matrix exactly. Raising it
-blends in the drifting 4-qubit router. The patchbay wires on screen always
-show the sends actually in use.
+**CHAOS** (bottom bar) starts at 0, so the keys sends follow the matrix
+exactly; raising it blends the drifting 4-qubit router into the first four
+channels. The patchbay wires on screen show the keys sends in use.
 
 ## Drum machine
 
 Press **Drums** (or the *Drum machine* tab in the rack). **Groove** starts and
-stops it.
+stops it. Its sound goes through the **Drum FX** rig.
 
 - Six tracks: KLONG (barrel drum, tuned to the lai), SLAP, KICK, SNARE, CHING
   (open cymbal) and CHAP (closed cymbal).
@@ -145,7 +150,7 @@ Works in current Chrome, Firefox, Edge and Safari 16.4+, desktop or mobile.
 | Voice buttons | Pick which voice (khaen/phin/so/klong) the keyboard and globe play |
 | Lai buttons | Switch lai (YAI / NOI / SUTSANAEN / PO SAI / SOI) |
 | TEMPERAMENT · KEY | Pick the well temperament and transpose the lai |
-| Effects · Drums | Open the rack on the effects or drum machine page |
+| Keys FX · Drum FX · Drums | Open the rack on that page |
 | CHAOS | Blend the manual send matrix ↔ qubit-entangled routing |
 | BPM | Groove tempo (and synced delay time) |
 | MASTER | Master output volume |
@@ -161,8 +166,8 @@ static/
 ├── style.css           # steel machine-panel theme
 ├── tuning.js           # lai + well-temperament tables
 ├── synth.js            # Web Audio voices, ching, send matrix
-├── fx.js               # FX rig: gain/amp inserts, W-D-W mixer, phasers, drive, IR sim
-├── fxrack.js           # rack UI: effects page + drum machine page
+├── fx.js               # FX rigs: pre-amp EQ, amp + cab sim, reverbs, delays, mixer, network, IR
+├── fxrack.js           # rack UI: Keys FX, Drum FX and drum machine pages
 ├── engine.js           # state, qubit router, pitch mapping, drum sequencer, recorder
 ├── app.js              # scene, keyboard, patchbay overlay, HUD
 ├── globe.js            # 3D Earth + submarine cables, cable picking

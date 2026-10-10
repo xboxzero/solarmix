@@ -1,7 +1,7 @@
 // morlam Web Audio synth engine
-// Four mor lam voices (khaen, phin, so, klong) plus a ching cymbal. Each voice
-// runs through its own GAIN → AMP insert, then a 4×4 send matrix into the
-// parallel W-D-W mixer and IR stage of the FX rig (fx.js).
+// Four mor lam voices (khaen, phin, so, klong) and a six-track drum kit, each
+// with its own FX rig (fx.js): the voices feed the KEYS rig, the drum tracks
+// feed the DRUMS rig. Both rigs end in the shared master bus.
 
 class MorlamSynth {
   constructor() {
@@ -11,8 +11,7 @@ class MorlamSynth {
     this.analyser = null;
     this.recordDest = null;
     this.voices = [null, null, null, null];
-    this.sendGains = [];            // 16 GainNodes, row-major [v*4 + b]
-    this.fx = null;                 // FxRig
+    this.rigs = null;               // { keys: FxRig, drums: FxRig }
     this.isInitialized = false;
     this._levelBuf = null;
   }
@@ -40,23 +39,21 @@ class MorlamSynth {
       comp.connect(this.recordDest);
     }
 
-    this.fx = new FxRig(ctx, this.masterGain);
+    this.rigs = {
+      keys: new FxRig(ctx, this.masterGain, 'keys', 4),
+      drums: new FxRig(ctx, this.masterGain, 'drums', DRUM_KINDS.length),
+    };
 
-    // ---- voices → own amp insert → 4 sends into the mixer channels ----
     const voiceClasses = [KhaenVoice, PhinVoice, SoVoice, KlongVoice];
     for (let v = 0; v < 4; v++) {
       const out = ctx.createGain();
       out.gain.value = 0.6;
-      out.connect(this.fx.amps[v].input);
-      for (let b = 0; b < 4; b++) {
-        const s = ctx.createGain();
-        s.gain.value = 0;
-        this.fx.amps[v].output.connect(s); s.connect(this.fx.inputs[b]);
-        this.sendGains[v * 4 + b] = s;
-      }
+      out.connect(this.rigs.keys.inputs[v]);
       this.voices[v] = new voiceClasses[v](ctx, out);
-      if (v === 3) this.drums = new DrumKit(ctx, out); // drum machine shares the klong's sends
     }
+    this.drums = new DrumKit(ctx, this.rigs.drums.inputs.map(inp => {
+      const g = ctx.createGain(); g.gain.value = 0.6; g.connect(inp); return g;
+    }));
 
     this.isInitialized = true;
   }
@@ -74,10 +71,11 @@ class MorlamSynth {
   // Drum machine hit: kind ∈ DrumKit sounds, `opt` = { tune (semitones), decay (×), root (Hz) }.
   drum(kind, vel, when, opt) { if (this.isInitialized) this.drums.hit(kind, vel, when, opt); }
   setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
-  setSendLevel(voice, bus, level) { const g = this.sendGains[voice * 4 + bus]; if (g) this._ramp(g.gain, level, 0.05); }
-  setFx(path, value) { if (this.fx) this.fx.set(path, value); }
-  loadIRFile(file) { return this.fx ? this.fx.loadIRFile(file) : Promise.reject(new Error('audio not started')); }
-  channelLevels() { return this.fx ? this.fx.channelLevels() : [0, 0, 0, 0]; }
+  setSendLevel(rig, src, ch, level) { if (this.rigs) this.rigs[rig].setSend(src, ch, level); }
+  setFx(rig, path, value) { if (this.rigs) this.rigs[rig].set(path, value); }
+  loadIRFile(rig, file) { return this.rigs ? this.rigs[rig].loadIRFile(file) : Promise.reject(new Error('audio not started')); }
+  channelLevels(rig) { return this.rigs ? this.rigs[rig].channelLevels() : CHANNELS.map(() => 0); }
+  eqResponse(rig, freqs) { return this.rigs ? this.rigs[rig].eqResponse(freqs) : null; }
 
   // RMS of the master output, 0..1
   outputLevel() {
@@ -264,10 +262,12 @@ class KlongVoice {
 }
 
 // Drum machine sounds. Every hit builds short-lived nodes, so hits overlap
-// and ring out naturally. All sounds go to the klong voice's sends.
+// and ring out naturally. Each sound has its own output (a source of the
+// DRUMS rig), in DRUM_KINDS order.
+const DRUM_KINDS = ['klong', 'slap', 'kick', 'snare', 'ching', 'chap'];
 class DrumKit {
-  constructor(ctx, output) {
-    this.ctx = ctx; this.output = output;
+  constructor(ctx, outputs) {
+    this.ctx = ctx; this.outs = outputs; this.output = outputs[0];
     this.noise = noiseBuffer(ctx, 1);
   }
   _env(t, peak, len) {
@@ -292,6 +292,7 @@ class DrumKit {
   }
   hit(kind, vel, when, opt = {}) {
     const t = when ?? this.ctx.currentTime;
+    this.output = this.outs[Math.max(0, DRUM_KINDS.indexOf(kind))];
     const tune = Math.pow(2, (opt.tune || 0) / 12), dec = opt.decay || 1;
     const root = Math.max(45, Math.min(160, (opt.root || 110) / 2)) * tune;
     switch (kind) {
