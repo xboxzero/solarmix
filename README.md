@@ -6,8 +6,8 @@
 > step-sequenced drum machine, each with its own hand-controlled FX rig
 > (pre-amp EQ, amp + cabinet simulator, a six-channel parallel wet-dry-wet
 > mixer with eight reverbs and six delays, a manual signal network, IR
-> simulation). Dark-fantasy look: soot-black stone, tarnished gold, ember
-> glow, inscriptional capitals.
+> simulation). Look: black, gray and white brushed metal with green light,
+> inscriptional capitals.
 >
 > **Play:** https://xboxzero.github.io/solarmix/
 
@@ -71,11 +71,10 @@ chaos = 1 ─► routing follows the qubit-entangled coefficients
 
 ## The globe
 
-A dark 3D Earth with three layers, toggled in the **Realm** panel:
+A dark steel 3D Earth with three layers, toggled in the **Realm** panel:
 
 - **Cables** — every submarine fibre-optic cable on TeleGeography's Submarine
-  Cable Map (about 700 systems) and their landing stations, glowing like
-  embers. **Each cable is a string you can play:** touch it and the voice
+  Cable Map (about 700 systems) and their landing stations, lit green. **Each cable is a string you can play:** touch it and the voice
   sounds; the position along the cable, from one end to the other, picks one
   of the five notes of the current lai. The struck cable lights up in the
   voice's colour and its name appears in the side panel.
@@ -85,12 +84,12 @@ A dark 3D Earth with three layers, toggled in the **Realm** panel:
   computed on the GPU from simplified circular orbits; altitude is
   compressed (not to scale) so the GPS and geostationary rings stay in view.
   **Orbit speed** runs them in real time or up to 3600× faster.
-- **5G** — countries with commercial 5G service glow on the surface, and major
-  5G hubs pulse. This is an approximate, illustrative layer (compiled from
+- **5G** — countries with commercial 5G service are picked out in silver, and
+  major 5G hubs pulse. This is an approximate, illustrative layer (compiled from
   public operator announcements, 2025), not a coverage map.
 
 Drag anywhere off the cables to turn the globe; left alone it drifts slowly.
-Embers drift up around it.
+Green sparks drift up around it.
 
 ## FX rigs
 
@@ -190,7 +189,7 @@ Works in current Chrome, Firefox, Edge and Safari 16.4+, desktop or mobile.
 ```
 static/
 ├── index.html          # page + HUD markup
-├── style.css           # dark-fantasy theme
+├── style.css           # black / gray / white metal theme with green light
 ├── tuning.js           # lai + well-temperament tables
 ├── synth.js            # Web Audio voices, ching, send matrix
 ├── fx.js               # FX rigs: pre-amp EQ, amp + cab sim, reverbs, delays, mixer, network, IR

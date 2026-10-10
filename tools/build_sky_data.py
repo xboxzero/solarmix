@@ -17,11 +17,11 @@ src, out = sys.argv[1], sys.argv[2]
 
 # ---- satellites: circular-orbit elements, all advanced to one reference epoch ----
 GROUPS = [
-    ("starlink", "Starlink", "#e8e2d0"),
-    ("oneweb", "OneWeb", "#7fb3ff"),
-    ("iridium-NEXT", "Iridium", "#9fe8c8"),
-    ("gps-ops", "GPS", "#ffd27a"),
-    ("geo", "Geostationary", "#ff8a4a"),
+    ("starlink", "Starlink", "#eef2f4"),
+    ("oneweb", "OneWeb", "#9fb3c2"),
+    ("iridium-NEXT", "Iridium", "#7dffc0"),
+    ("gps-ops", "GPS", "#c8ff6a"),
+    ("geo", "Geostationary", "#39ff88"),
 ]
 MU = 398600.4418  # km^3/s^2
 R_EARTH = 6371.0
