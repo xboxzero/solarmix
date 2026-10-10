@@ -20,6 +20,16 @@ import { Globe } from './globe.js';
 // Web Audio Synth
 // =====================================================================
 const synth = new MorlamSynth();
+// Touch devices (phones, tablets) share a small CPU budget between the 3D
+// view and audio, so they get a lighter render and a bigger audio buffer.
+const COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+
+// Audio buffer size: Low latency / Balanced / Stable (bigger buffer, rides
+// out CPU spikes under heavy effects). Remembered per browser.
+const LATENCY_KEY = 'morlam.latency';
+let latency = COARSE ? 'playback' : 'balanced';
+try { latency = localStorage.getItem(LATENCY_KEY) || latency; } catch (e) { /* storage blocked */ }
+synth.latencyHint = latency;
 const engine = new LocalEngine(synth);
 let audioReady = false;
 let audioError = null;
@@ -106,6 +116,17 @@ window.addEventListener('unhandledrejection', e => {
 // Control: every UI action is a message to the local engine
 // =====================================================================
 const audioStatus = document.getElementById('status');
+const latencySel = document.getElementById('latency');
+if (latencySel) {
+  latencySel.value = latency;
+  latencySel.addEventListener('change', () => {
+    try { localStorage.setItem(LATENCY_KEY, latencySel.value); } catch (e) { /* storage blocked */ }
+    if (!synth.isInitialized) { synth.latencyHint = latencySel.value; return; }
+    // the buffer size is fixed when audio starts, so apply it with a restart
+    if (confirm('Changing the audio buffer restarts the app (your effect settings reset). Continue?')) location.reload();
+    else latencySel.value = synth.latencyHint;
+  });
+}
 function send(obj) {
   try { engine.handle(obj); } catch (e) { console.error('Engine error:', e); }
 }
@@ -125,7 +146,7 @@ try {
 
 if (!renderer) throw new Error('WebGL renderer initialization failed');
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, COARSE ? 1.5 : 2));
 renderer.setClearColor(0xe4e2dd, 1);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
@@ -270,7 +291,7 @@ function buildPatchbay() {
   const below = rectOf('.hud-bot');
   const top = (above ? above.bottom : 80) + 30;
   const bot = Math.max(top + 90, (below ? below.top : h - 260) - 46);
-  const nB = CHANNELS.length;
+  const nB = MATRIX_COLS.length;
   voicePts.length = 0; busPts.length = 0; wireEls.length = 0;
   for (let i = 0; i < 4; i++) voicePts[i] = { x: xR, y: top + (bot - top) * i / 3 };
   for (let i = 0; i < nB; i++) busPts[i] = { x: xL, y: top + (bot - top) * i / (nB - 1) };
@@ -307,16 +328,16 @@ function buildPatchbay() {
     svg.appendChild(t);
   };
   for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#1d1d1b');
-  const busLabels = CHANNEL_NAMES;
+  const busLabels = MATRIX_COLS;
   for (let i = 0; i < nB; i++) drawNode(busPts[i], busLabels[i], '#7a7770');
 }
 window.addEventListener('resize', buildPatchbay);
 buildPatchbay();
 
-// sends: keys rig, row-major [voice * CHANNELS.length + channel]
+// sends: keys rig, row-major [voice * MATRIX_COLS.length + col] (col 0 = amp bus)
 function updateWires(sends) {
   let idx = 0;
-  const nB = CHANNELS.length;
+  const nB = MATRIX_COLS.length;
   for (let v = 0; v < 4; v++) {
     for (let b = 0; b < nB; b++) {
       const a = voicePts[v], c = busPts[b];
@@ -561,6 +582,8 @@ const clock = new THREE.Clock();
 let outLevelSmoothed = 0;
 
 let animationRunning = false;
+let frameN = 0;
+const rackPanel = document.getElementById('rack');
 function animate() {
   try {
     if (!renderer || !scene || !camera || !clock || !handles) {
@@ -591,7 +614,11 @@ function animate() {
     }
     globe.update(outLevelSmoothed);
 
-    renderer.render(scene, camera);
+    // Leave CPU for the audio: no 3D while the rack covers the globe, and
+    // 30 fps instead of 60 on touch devices.
+    frameN++;
+    const covered = rackPanel && !rackPanel.hidden;
+    if (!covered && (!COARSE || frameN % 2 === 0)) renderer.render(scene, camera);
 
     if (typeof requestAnimationFrame !== 'undefined') {
       requestAnimationFrame(animate);

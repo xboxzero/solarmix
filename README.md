@@ -86,8 +86,9 @@ complete effects rig** with independent settings. Open them with **Keys FX**
 and **Drum FX** in the bottom bar (or the tabs in the rack). Each rig:
 
 ```
-source ─► PRE-AMP EQ ─► AMP ─► CAB        one chain per source (4 voices / 6 drum tracks)
-       ─► SIGNAL NETWORK: every source → every channel, by hand
+sources ─┬─► AMP BUS ─► PRE-AMP EQ ─► AMP ─► CAB ─► amp sends ─┐   one amp per rig
+         └─► direct sends (bypass the amp) ────────────────────┤
+       ─► SIGNAL NETWORK: every source → amp bus / every channel, amp → every channel
        ─► six parallel channels, wet · dry · wet:
             REV A · DLY A │ DRY │ DLY B · REV B │ MOD
             + FX → FX feeds (mod → delays/reverbs, delays → reverbs)
@@ -101,15 +102,21 @@ source ─► PRE-AMP EQ ─► AMP ─► CAB        one chain per source (4 vo
 | **2 Amp simulator** | Model (Clean, Tube warm, Crunch, Lead hi-gain, Bass, Fuzz), drive, master; tone stack (bass, mid, treble, presence); cabinet (1×12 open, 1×12 closed, 2×12, 4×12, bass 1×15, off) with mic position (off-axis ↔ on-axis). Models are roughly level-matched |
 | **3 Modulation** | Chorus / flanger / phaser for the MOD channel: rate, depth, feedback |
 | **4 Mixer** | **REV A / REV B**: Room, Chamber, Hall, Cathedral, Plate, Spring, Gated or Reverse, with size, decay, pre-delay, tone, low cut. **DLY A / DLY B**: Digital, Tape echo, Analog (BBD), Ping-pong, Multi-tap or Slapback, with sync + note value (1/2 … 1/16, dotted, triplet) or free time, feedback, tone, wow. Each reverb and delay has a **phase shifter** insert (rate, depth, feedback, mix). **DRY**: Clean / Low gain / Hi gain drive and a compressor. **MOD**: output of section 3. Every channel has its own fader, pan, mute, solo and meter |
-| **5 Signal network** | *Sources → channels*: a knob for every source into every channel. *FX → FX feeds*: send a channel's processed signal into another (e.g. a delay into a reverb) |
+| **5 Signal network** | *Sources → amp / channels*: each source's level into the shared amp (AMP column) and its direct sends into each channel, bypassing the amp; the AMP OUT row sends the amp into each channel. *FX → FX feeds*: send a channel's processed signal into another (e.g. a delay into a reverb) |
 | **6 IR simulation & output** | Cabinet/room impulse (built-in or your own WAV/AIFF), dry ⇄ IR mix, IR level, rig output level |
 
-**Performance:** only what you can hear is computed. A neutral EQ band, a
+**Performance:** each rig has one shared amp (not one per source), swept
+filters update once per audio block, and only what you can hear is computed. A neutral EQ band, a
 bypassed amp, a cabinet set to Off, a channel with nothing sent to it or its
 fader down, a phase shifter or IR stage that is off — all of these are
 unplugged from the audio graph and cost no CPU. Phase shifters start off, and
 the drum rig starts with its IR stage off and REV B down; switch them on as
 you need them.
+
+**Buffer** (top bar): *Low latency*, *Balanced* (desktop default) or *Stable*
+(phone default: a bigger audio buffer that rides out CPU spikes under heavy
+effects, at the cost of a little delay). The 3D globe pauses while the rack
+covers it and runs at 30 fps on touch devices, leaving CPU for audio.
 
 All controls are manual:
 

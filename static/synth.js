@@ -23,9 +23,9 @@ class MorlamSynth {
     // iOS 17+: play through the ringer/silent switch like a media app
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* not supported */ }
     let ctx;
-    // 'balanced' gives the audio thread a bigger buffer than 'interactive',
-    // so phones don't drop out under load (a few ms more latency).
-    try { ctx = new AC({ latencyHint: 'balanced' }); } catch (e) { ctx = new AC(); }
+    // latencyHint: 'interactive' (small buffer) · 'balanced' · 'playback'
+    // (big buffer: more latency, but rides out CPU spikes under heavy FX)
+    try { ctx = new AC({ latencyHint: this.latencyHint || 'balanced' }); } catch (e) { ctx = new AC(); }
     this.ctx = this.audioContext = ctx;
 
     // Unlock while still inside the user's tap, before the (heavier) graph
@@ -83,7 +83,7 @@ class MorlamSynth {
   // Drum machine hit: kind ∈ DrumKit sounds, `opt` = { tune (semitones), decay (×), root (Hz) }.
   drum(kind, vel, when, opt) { if (this.isInitialized) this.drums.hit(kind, vel, when, opt); }
   setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
-  setSendLevel(rig, src, ch, level) { if (this.rigs) this.rigs[rig].setSend(src, ch, level); }
+  setSendLevel(rig, src, col, level) { if (this.rigs) this.rigs[rig].setSend(src, col, level); }
   setFx(rig, path, value) { if (this.rigs) this.rigs[rig].set(path, value); }
   loadIRFile(rig, file) { return this.rigs ? this.rigs[rig].loadIRFile(file) : Promise.reject(new Error('audio not started')); }
   channelLevels(rig) { return this.rigs ? this.rigs[rig].channelLevels() : CHANNELS.map(() => 0); }

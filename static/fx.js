@@ -4,8 +4,11 @@
 //
 // One rig:
 //
-//   source ─► PRE-AMP EQ ─► AMP SIM ─► CAB SIM        (one chain per source)
-//          ─► signal network: every source → every channel (send matrix)
+//   sources ─┬─► AMP BUS ─► PRE-AMP EQ ─► AMP SIM ─► CAB SIM ─► amp sends ─┐
+//            └─► direct sends (bypass the amp) ────────────────────────────┤
+//          ─► signal network: every source → amp bus and every channel,     │
+//             amp output → every channel                                    │
+//          ◄───────────────────────────────────────────────────────────────┘
 //          ─► six parallel channels (wet · dry · wet):
 //               REV A · DLY A │ DRY │ DLY B · REV B │ MOD
 //               reverbs & delays each have a type, a phase shifter insert,
@@ -19,6 +22,8 @@
 
 const CHANNELS = ['dry', 'ra', 'da', 'rb', 'db', 'mod'];
 const CHANNEL_NAMES = ['DRY', 'REV A', 'DLY A', 'REV B', 'DLY B', 'MOD'];
+// Send matrix columns: 0 = amp bus, 1… = the channels above.
+const MATRIX_COLS = ['AMP', ...CHANNEL_NAMES];
 // FX → FX feeds allowed (acyclic): mod → delays/reverbs, delays → reverbs
 const NET_FEEDS = [['mod', 'da'], ['mod', 'db'], ['mod', 'ra'], ['mod', 'rb'], ['da', 'ra'], ['da', 'rb'], ['db', 'ra'], ['db', 'rb']];
 
@@ -44,7 +49,7 @@ const REVERB_TYPES = {
   room:      { name: 'Room',      length: 0.8, decay: 0.18, early: 8, earlySpread: 0.03, lp: 7000 },
   chamber:   { name: 'Chamber',   length: 1.5, decay: 0.35, early: 10, earlySpread: 0.04, lp: 6500 },
   hall:      { name: 'Hall',      length: 3.0, decay: 0.9, predelay: 0.02, early: 6, earlySpread: 0.06, lp: 5000 },
-  cathedral: { name: 'Cathedral', length: 6.0, decay: 2.2, predelay: 0.03, early: 4, earlySpread: 0.1, lp: 4000 },
+  cathedral: { name: 'Cathedral', length: 4.0, decay: 1.8, predelay: 0.03, early: 4, earlySpread: 0.1, lp: 4000 },
   plate:     { name: 'Plate',     length: 2.0, decay: 0.55, hp: 220, lp: 9000 },
   spring:    { name: 'Spring',    length: 2.0, decay: 0.45, comb: 0.031, hp: 250, lp: 4500 },
   gated:     { name: 'Gated',     length: 0.45, decay: 5, gate: true, lp: 8000 },
@@ -93,6 +98,8 @@ function rigDefaults(kind) {
     P[`ch.${i}.level`] = lv[i]; P[`ch.${i}.pan`] = pan[i]; P[`ch.${i}.mute`] = false; P[`ch.${i}.solo`] = false;
   });
   for (const [a, b] of NET_FEEDS) P[`net.${a}.${b}`] = keys && a === 'da' && b === 'ra' ? 0.15 : 0;
+  // amp output → each channel
+  (keys ? [0.9, 0.35, 0.3, 0.15, 0.15, 0.3] : [0.9, 0.3, 0.1, 0, 0, 0]).forEach((v, i) => { P[`aout.${i}`] = v; });
   return P;
 }
 const FX_DEFAULTS = { keys: rigDefaults('keys'), drums: rigDefaults('drums') };
@@ -180,7 +187,7 @@ const IR_TYPES = {
   cab212: { name: 'CAB 2×12', make: sr => cabIR(sr, { tau: 0.003, pair: true, hp: 80, low: 120, lowGain: 4, scoop: 750, scoopGain: -3, bite: 2000, biteGain: 4, lp: 4800 }) },
   cab412: { name: 'CAB 4×12', make: sr => cabIR(sr, { tau: 0.005, pair: true, hp: 70, low: 100, lowGain: 6, scoop: 600, scoopGain: -4, bite: 1800, biteGain: 3, lp: 4000 }) },
   room:   { name: 'SMALL ROOM', make: sr => spaceIR(sr, { length: 0.7, decay: 0.16, early: 8, earlySpread: 0.03, lp: 7000 }) },
-  hall:   { name: 'HALL', make: sr => spaceIR(sr, { length: 3.2, decay: 0.9, predelay: 0.025, early: 6, earlySpread: 0.06, lp: 5000 }) },
+  hall:   { name: 'HALL', make: sr => spaceIR(sr, { length: 2.0, decay: 0.7, predelay: 0.025, early: 6, earlySpread: 0.06, lp: 5000 }) },
   plate:  { name: 'PLATE', make: sr => spaceIR(sr, { length: 2.0, decay: 0.55, hp: 220, lp: 9000 }) },
   spring: { name: 'SPRING', make: sr => spaceIR(sr, { length: 2.0, decay: 0.45, comb: 0.031, hp: 250, lp: 4500 }) },
   file:   { name: 'LOADED FILE' },
@@ -218,6 +225,11 @@ function clipCurve(type, drive) {
 // browser does not compute them at all — a neutral EQ band or a bypassed
 // amp costs nothing. Rewiring only happens when the set of stages changes.
 // ---------------------------------------------------------------------------
+// Swept filters (phasers) recompute their coefficients for every sample when
+// an LFO drives their frequency. Where the browser allows it, compute them
+// once per 128-sample block instead — inaudible for slow sweeps, far cheaper.
+function kRate(param) { try { if ('automationRate' in param) param.automationRate = 'k-rate'; } catch (e) { /* unsupported */ } }
+
 class Rewire {
   constructor(input, output) { this.input = input; this.output = output; this.cur = null; }
   set(nodes) {
@@ -232,7 +244,7 @@ class Rewire {
 }
 
 // ---------------------------------------------------------------------------
-// Phase shifter insert: 6 allpass stages swept by an LFO, feedback, dry/wet.
+// Phase shifter insert: 4 allpass stages swept by an LFO, feedback, dry/wet.
 // `invert` starts the LFO half a cycle later so two phasers sweep opposite.
 // ---------------------------------------------------------------------------
 class Phaser {
@@ -245,15 +257,16 @@ class Phaser {
     this.lfoGain = ctx.createGain();
     const lfoSign = ctx.createGain(); lfoSign.gain.value = invert ? -1 : 1;
     this.lfo.connect(lfoSign); lfoSign.connect(this.lfoGain);
-    this.stages = [0, 1, 2, 3, 4, 5].map(() => {
+    this.stages = [0, 1, 2, 3].map(() => {
       const a = ctx.createBiquadFilter(); a.type = 'allpass'; a.frequency.value = 900; a.Q.value = 0.5;
+      kRate(a.frequency);
       this.lfoGain.connect(a.frequency);
       return a;
     });
     this.fb = ctx.createGain();
     const loop = ctx.createDelay(0.01);
     this.input.connect(this.dry); this.dry.connect(this.output);
-    for (let i = 0; i < 5; i++) this.stages[i].connect(this.stages[i + 1]);
+    for (let i = 0; i < 3; i++) this.stages[i].connect(this.stages[i + 1]);
     this.wet.connect(this.output);
     this.fb.connect(loop); loop.connect(this.stages[0]);
     this.lfo.start();
@@ -263,8 +276,8 @@ class Phaser {
   setOn(on) {
     if (on === this.on) return;
     this.on = on;
-    if (on) { this.input.connect(this.stages[0]); this.stages[5].connect(this.wet); this.stages[5].connect(this.fb); }
-    else { this.input.disconnect(this.stages[0]); this.stages[5].disconnect(); }
+    if (on) { this.input.connect(this.stages[0]); this.stages[3].connect(this.wet); this.stages[3].connect(this.fb); }
+    else { this.input.disconnect(this.stages[0]); this.stages[3].disconnect(); }
   }
   apply(on, rate, depth, fdbk, mix, ramp) {
     this.setOn(!!on && mix > 0);
@@ -351,7 +364,7 @@ const biq = (ctx, type, f, q, gain) => {
 function chain(nodes) { for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]); }
 
 // ---------------------------------------------------------------------------
-// Per-source chain: PRE-AMP EQ → AMP SIM → CAB SIM
+// Rig front end (the amp bus): PRE-AMP EQ → AMP SIM → CAB SIM
 // ---------------------------------------------------------------------------
 class SourceChain {
   constructor(ctx) {
@@ -370,7 +383,7 @@ class SourceChain {
     this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '2x';
     this.aInter = biq(ctx, 'lowpass', 20000, 0.7);
     this.aPre2 = ctx.createGain();
-    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '2x';
+    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = 'none'; // first stage already band-limits
     this.tBass = biq(ctx, 'lowshelf', 100, undefined, 0);
     this.tMid = biq(ctx, 'peaking', 600, 0.8, 0);
     this.tTreble = biq(ctx, 'highshelf', 2500, undefined, 0);
@@ -383,7 +396,7 @@ class SourceChain {
     this.cLow = biq(ctx, 'peaking', 120, 1.2, 0);
     this.cNotch = biq(ctx, 'peaking', 800, 1, 0);
     this.cPres = biq(ctx, 'peaking', 2500, 1.4, 0);
-    this.cLp1 = biq(ctx, 'lowpass', 20000, 0.8);
+    this.cLp1 = biq(ctx, 'lowpass', 20000, 1.2);
     this.cLp2 = biq(ctx, 'lowpass', 20000, 0.7);
     this.output = ctx.createGain();
     this.wire = new Rewire(this.input, this.output);
@@ -402,8 +415,8 @@ class SourceChain {
     }
     if (P['amp.on']) {
       const m = AMP_MODELS[P['amp.model']] || AMP_MODELS.clean;
-      n.push(this.aHp, this.aPre1, this.sh1, this.aInter);
-      if (m.c2) n.push(this.aPre2, this.sh2);
+      n.push(this.aHp, this.aPre1, this.sh1);
+      if (m.c2) n.push(this.aInter, this.aPre2, this.sh2);
       if (P['amp.bass'] + m.low !== 0) n.push(this.tBass);
       if (P['amp.mid'] !== 0) n.push(this.tMid);
       if (P['amp.treble'] + m.bright !== 0) n.push(this.tTreble);
@@ -411,7 +424,7 @@ class SourceChain {
       n.push(this.aPost, this.aMakeup, this.aMaster);
     }
     const c = CAB_TYPES[P['cab.type']];
-    if (c && c.lp) n.push(this.cHp, this.cLow, this.cNotch, this.cPres, this.cLp1, this.cLp2);
+    if (c && c.lp) n.push(this.cHp, this.cLow, this.cPres, this.cLp1); // 4 filters: HP, low thump, presence, roll-off
     this.wire.set(n);
   }
   applyPre(P, ramp) {
@@ -494,7 +507,8 @@ class ReverbUnit {
     clearTimeout(this._t);
     const build = () => {
       const t = REVERB_TYPES[P[x + '.type']] || REVERB_TYPES.room, size = P[x + '.size'], dec = P[x + '.decay'];
-      const o = Object.assign({}, t, { length: Math.min(10, t.length * size), decay: t.decay * size * dec });
+      // capped at 4 s: longer tails cost a lot of CPU and are mostly inaudible in a mix
+      const o = Object.assign({}, t, { length: Math.min(4, t.length * size), decay: t.decay * size * dec });
       this.conv.buffer = toBuffer(this.ctx, spaceIR(this.ctx.sampleRate, o));
     };
     if (initial) build(); else this._t = setTimeout(build, 120); // debounce knob drags
@@ -600,7 +614,7 @@ class ModUnit {
     this.input.connect(this.delay); this.delayFb.connect(this.delay);
     this.phaseLfo = ctx.createGain();
     this.lfo.connect(this.phaseLfo);
-    this.allpass = [0, 1, 2, 3].map(() => { const a = biq(ctx, 'allpass', 800, 0.6); this.phaseLfo.connect(a.frequency); return a; });
+    this.allpass = [0, 1, 2, 3].map(() => { const a = biq(ctx, 'allpass', 800, 0.6); kRate(a.frequency); this.phaseLfo.connect(a.frequency); return a; });
     this.phaseFb = ctx.createGain();
     const loop = ctx.createDelay(0.01);
     this.phaseOut = ctx.createGain();
@@ -643,22 +657,27 @@ class FxRig {
     this.ctx = ctx;
     this.kind = kind;
     this.p = Object.assign({}, FX_DEFAULTS[kind]);
-    this.sources = Array.from({ length: nSources }, () => new SourceChain(ctx));
-    this.inputs = this.sources.map(s => s.input);
+    // One shared pre-amp EQ → amp → cab per rig (not one per source: that
+    // multiplied the CPU cost by the number of sources).
+    this.front = new SourceChain(ctx);
+    this.inputs = Array.from({ length: nSources }, () => ctx.createGain());
     this._levelBuf = new Float32Array(512);
-    const nCh = CHANNELS.length;
+    const nCh = CHANNELS.length, nCol = MATRIX_COLS.length;
 
-    // channel inputs + send matrix (source s → channel c). A send is only
-    // plugged in while its level is above zero.
+    // channel inputs + send matrix (source s → amp bus or channel). A send is
+    // only plugged in while its level is above zero.
     this.chIn = CHANNELS.map(() => ctx.createGain());
     this.sends = [];
-    this.sendVal = new Float32Array(nSources * nCh);
-    this.sendOn = new Uint8Array(nSources * nCh);
-    this.sources.forEach((src, s) => CHANNELS.forEach((_, c) => {
+    this.sendVal = new Float32Array(nSources * nCol);
+    this.sendOn = new Uint8Array(nSources * nCol);
+    this.inputs.forEach((_, s) => MATRIX_COLS.forEach((__, col) => {
       const g = ctx.createGain(); g.gain.value = 0;
-      g.connect(this.chIn[c]);
-      this.sends[s * nCh + c] = g;
+      g.connect(col === 0 ? this.front.input : this.chIn[col - 1]);
+      this.sends[s * nCol + col] = g;
     }));
+    // amp output → channels
+    this.aout = CHANNELS.map((_, c) => { const g = ctx.createGain(); g.gain.value = 0; g.connect(this.chIn[c]); return g; });
+    this.aoutOn = new Uint8Array(nCh);
 
     // channel processing
     this.dry = new DryDrive(ctx);
@@ -707,22 +726,30 @@ class FxRig {
     this.out.connect(destination);
     this.irFileBuffer = null;
 
-    for (const g of ['rig', 'pre', 'amp', 'cab', 'mod', 'ra', 'rb', 'da', 'db', 'phra', 'phda', 'phrb', 'phdb', 'dry', 'ch', 'net', 'ir']) this._apply(g, null, true);
+    for (const g of ['rig', 'pre', 'amp', 'cab', 'aout', 'mod', 'ra', 'rb', 'da', 'db', 'phra', 'phda', 'phrb', 'phdb', 'dry', 'ch', 'net', 'ir']) this._apply(g, null, true);
   }
 
-  setSend(s, c, v) {
-    const i = s * CHANNELS.length + c, g = this.sends[i];
+  // col: 0 = amp bus, 1… = channels (MATRIX_COLS)
+  setSend(s, col, v) {
+    const i = s * MATRIX_COLS.length + col, g = this.sends[i];
     if (!g) return;
     const was = this.sendVal[i] > 0;
     this.sendVal[i] = v;
     g.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
-    if (v > 0 && !this.sendOn[i]) { this.sources[s].output.connect(g); this.sendOn[i] = 1; }
+    const src = this.inputs[s];
+    if (v > 0 && !this.sendOn[i]) { src.connect(g); this.sendOn[i] = 1; }
     if (v <= 0 && this.sendOn[i]) {
       setTimeout(() => { // unplug once faded out
-        if (this.sendVal[i] <= 0 && this.sendOn[i]) { this.sources[s].output.disconnect(g); this.sendOn[i] = 0; }
+        if (this.sendVal[i] <= 0 && this.sendOn[i]) { src.disconnect(g); this.sendOn[i] = 0; }
       }, 300);
     }
     if (was !== v > 0) this._wireChannels();
+  }
+
+  _ampFed() {
+    const nCol = MATRIX_COLS.length;
+    for (let i = 0; i < this.sendVal.length; i += nCol) if (this.sendVal[i] > 0) return true;
+    return false;
   }
 
   // Plug in only the channels that are both fed and heard (directly or via
@@ -732,7 +759,13 @@ class FxRig {
     const anySolo = CHANNELS.some((_, i) => P[`ch.${i}.solo`]);
     const audible = id => { const i = at(id); return P[`ch.${i}.level`] > 0 && !P[`ch.${i}.mute`] && (!anySolo || P[`ch.${i}.solo`]); };
     const feed = (a, b) => P[`net.${a}.${b}`] > 0;
-    const fedBySource = id => { const c = at(id); for (let i = c; i < this.sendVal.length; i += nCh) if (this.sendVal[i] > 0) return true; return false; };
+    const nCol = MATRIX_COLS.length, ampFed = this._ampFed();
+    const fedBySource = id => {
+      const c = at(id);
+      if (ampFed && P[`aout.${c}`] > 0) return true;
+      for (let i = c + 1; i < this.sendVal.length; i += nCol) if (this.sendVal[i] > 0) return true;
+      return false;
+    };
     const unitOn = id => id !== 'mod' || P['mod.on'];
     const hasIn = {}, used = {}, active = {};
     for (const id of ['dry', 'mod', 'da', 'db', 'ra', 'rb']) // signal flows mod → delays → reverbs
@@ -772,9 +805,18 @@ class FxRig {
     const ramp = (param, v, tc = 0.03) => initial ? (param.value = v) : param.setTargetAtTime(v, t, tc);
     switch (group) {
       case 'rig': ramp(this.out.gain, P['rig.level']); break;
-      case 'pre': for (const s of this.sources) s.applyPre(P, ramp); break;
-      case 'amp': for (const s of this.sources) s.applyAmp(P, ramp); break;
-      case 'cab': for (const s of this.sources) s.applyCab(P, ramp); break;
+      case 'pre': this.front.applyPre(P, ramp); break;
+      case 'amp': this.front.applyAmp(P, ramp); break;
+      case 'cab': this.front.applyCab(P, ramp); break;
+      case 'aout':
+        this.aout.forEach((g, c) => {
+          const v = P[`aout.${c}`];
+          ramp(g.gain, v);
+          if (v > 0 && !this.aoutOn[c]) { this.front.output.connect(g); this.aoutOn[c] = 1; }
+          if (v <= 0 && this.aoutOn[c]) { this.front.output.disconnect(g); this.aoutOn[c] = 0; }
+        });
+        if (this.wired) this._wireChannels();
+        break;
       case 'mod': this.mod.apply(P, ramp); if (this.wired) this._wireChannels(); break;
       case 'ra': case 'rb': this.rev[group].apply(P, group, ramp, initial); break;
       case 'da': case 'db': this.dly[group].apply(P, group, ramp); break;
@@ -829,7 +871,7 @@ class FxRig {
 
   // Magnitude response (dB) of the pre-amp EQ at the given frequencies.
   eqResponse(freqs) {
-    const s = this.sources[0], f = new Float32Array(freqs), mag = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
+    const s = this.front, f = new Float32Array(freqs), mag = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
     const out = new Float32Array(freqs.length);
     for (const b of [s.hpf, s.low, s.lm, s.hm, s.high, s.lpf]) {
       if (!s.wire.cur || !s.wire.cur.includes(b)) continue; // band not in use = flat
@@ -856,6 +898,7 @@ window.FX_DEFAULTS = FX_DEFAULTS;
 window.IR_TYPES = IR_TYPES;
 window.CHANNELS = CHANNELS;
 window.CHANNEL_NAMES = CHANNEL_NAMES;
+window.MATRIX_COLS = MATRIX_COLS;
 window.NET_FEEDS = NET_FEEDS;
 window.AMP_MODELS = AMP_MODELS;
 window.CAB_TYPES = CAB_TYPES;

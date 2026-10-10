@@ -73,27 +73,19 @@ class LocalEngine {
     this.drumOn = true;
     this.recording = false;
 
-    // Manual send matrices (the signal network), row-major [source*6 + channel];
-    // channels: DRY · REV A · DLY A · REV B · DLY B · MOD
+    // Manual send matrices (the signal network), row-major [source * 7 + col];
+    // columns (MATRIX_COLS): AMP bus · DRY · REV A · DLY A · REV B · DLY B · MOD.
+    // Everything goes through the shared amp by default; the other columns
+    // are direct sends that bypass it. The amp's own sends live in fx 'aout.*'.
+    const row = (amp, ...direct) => [amp, ...direct, ...Array(6 - direct.length).fill(0)];
     this.route = {
-      keys: new Float32Array([
-        0.9, 0.3, 0.2, 0.1, 0.1, 0.4, // khaen
-        0.7, 0.5, 0.3, 0.2, 0.2, 0.0, // phin
-        0.5, 0.4, 0.6, 0.2, 0.3, 0.2, // so
-        0.9, 0.2, 0.0, 0.1, 0.0, 0.0, // klong
-      ]),
-      drums: new Float32Array([
-        0.9, 0.3, 0.0, 0.0, 0.0, 0.0, // klong
-        0.9, 0.4, 0.2, 0.0, 0.0, 0.0, // slap
-        1.0, 0.1, 0.0, 0.0, 0.0, 0.0, // kick
-        0.9, 0.3, 0.0, 0.5, 0.0, 0.0, // snare
-        0.8, 0.4, 0.3, 0.0, 0.0, 0.0, // ching
-        0.8, 0.2, 0.0, 0.0, 0.0, 0.0, // chap
-      ]),
+      keys: new Float32Array([].concat(row(1), row(1), row(1), row(1))),
+      drums: new Float32Array([].concat(row(1), row(1), row(1), row(1), row(1), row(1))),
     };
     // effective sends (keys blend in the qubit router with CHAOS)
-    this.sends = { keys: new Float32Array(24), drums: new Float32Array(36) };
-    this._sent = { keys: new Float32Array(24).fill(-1), drums: new Float32Array(36).fill(-1) };
+    const nCol = MATRIX_COLS.length;
+    this.sends = { keys: new Float32Array(4 * nCol), drums: new Float32Array(6 * nCol) };
+    this._sent = { keys: new Float32Array(4 * nCol).fill(-1), drums: new Float32Array(6 * nCol).fill(-1) };
 
     this.router = new QubitRouter();
     this.router.step(0, 0);
@@ -197,9 +189,9 @@ class LocalEngine {
         else if (msg.op === 'clear') d.tracks.forEach(tr => tr.pattern.fill(0));
         break;
       }
-      case 'route': {
-        const r = this.route[msg.rig], i = msg.src * CHANNELS.length + msg.ch;
-        if (r && msg.ch >= 0 && msg.ch < CHANNELS.length && i >= 0 && i < r.length) r[i] = clamp(msg.value, 0, 1);
+      case 'route': { // col: 0 = amp bus, 1… = channels
+        const r = this.route[msg.rig], i = msg.src * MATRIX_COLS.length + msg.col;
+        if (r && msg.col >= 0 && msg.col < MATRIX_COLS.length && i >= 0 && i < r.length) r[i] = clamp(msg.value, 0, 1);
         break;
       }
       case 'lissajous': {
@@ -235,11 +227,11 @@ class LocalEngine {
   // Advance qubits, apply routing, schedule drums. Call ~30×/s.
   step(dt) {
     this.router.step(this.chaos, dt);
-    const nCh = CHANNELS.length;
-    for (let i = 0; i < 24; i++) {
-      const v = i / nCh | 0, c = i % nCh;
-      // the qubit router drives the first four channels of the keys rig
-      const q = c < 4 ? this.router.coeffs[v * 4 + c] * 4 : this.route.keys[i];
+    const nCol = MATRIX_COLS.length;
+    for (let i = 0; i < this.sends.keys.length; i++) {
+      const v = i / nCol | 0, col = i % nCol;
+      // the qubit router drives the direct sends to the first four channels
+      const q = col >= 1 && col <= 4 ? this.router.coeffs[v * 4 + col - 1] * 4 : this.route.keys[i];
       this.sends.keys[i] = clamp(this.route.keys[i] * (1 - this.chaos) + q * this.chaos, 0, 1);
     }
     this.sends.drums.set(this.route.drums);
@@ -248,7 +240,7 @@ class LocalEngine {
     for (const rig of ['keys', 'drums']) {
       const cur = this.sends[rig], last = this._sent[rig];
       for (let i = 0; i < cur.length; i++) {
-        if (Math.abs(cur[i] - last[i]) > 1e-4) { s.setSendLevel(rig, i / nCh | 0, i % nCh, cur[i]); last[i] = cur[i]; }
+        if (Math.abs(cur[i] - last[i]) > 1e-4) { s.setSendLevel(rig, i / nCol | 0, i % nCol, cur[i]); last[i] = cur[i]; }
       }
     }
     this.chLevels = { keys: s.channelLevels('keys'), drums: s.channelLevels('drums') };
