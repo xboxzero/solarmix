@@ -1,19 +1,15 @@
-// tezeta local engine — the browser-side twin of the Rust server.
+// morlam engine — all synth state, in the browser.
 //
-// Holds the same parameter state, runs the 4-qubit tensor-product router,
-// maps Lissajous touches to qenet-mode pitches, sequences the kebero groove
-// and records the output. When no Pi is reachable (e.g. on GitHub Pages) it
-// also produces the `tick` messages the UI would otherwise get over the WS.
+// Holds the parameters, runs the 4-qubit tensor-product router, maps
+// Lissajous touches and keyboard keys to well-tempered lai pitches
+// (tuning.js), sequences the klong + ching groove, records the output and
+// hands the UI a snapshot of everything to draw.
 
-const MODE_SCALES = {
-  1: [0, 2, 4, 7, 9], // Tezeta:    C D E G A
-  2: [0, 4, 5, 7, 11], // Bati:     C E F G B
-  3: [0, 1, 5, 7, 8], // Ambassel:  C Db F G Ab
-  4: [0, 1, 5, 6, 9], // Anchihoye: C Db F Gb A
-};
-
-// 6/8 kebero pattern (velocity per eighth note)
-const KEBERO_PATTERN = [1.0, 0, 0.45, 0.8, 0, 0.5];
+// Mor lam groove, eighth notes over two bars of 4/4: klong (drum) on the
+// beats with pushes, ching (small cymbals) answering on every off-beat —
+// open "ching" on 2 & 4, closed "chap" elsewhere.
+const KLONG_PATTERN = [1.0, 0, 0.35, 0.6, 0.85, 0, 0.45, 0.3, 1.0, 0, 0.35, 0.6, 0.85, 0.25, 0.5, 0.4];
+const CHING_PATTERN = [0, 0.5, 0, 0.9, 0, 0.5, 0, 0.9, 0, 0.5, 0, 0.9, 0, 0.5, 0.3, 0.9];
 
 const TAU = Math.PI * 2;
 
@@ -52,19 +48,18 @@ class LocalEngine {
     this.synth = synth;
     this.master = 0.7;
     this.mode = 1;
-    this.root = 220;
     this.chaos = 0.25;
     this.reverbMix = 0.25;
     this.delayFb = 0.4;
-    this.bpm = 88;
+    this.bpm = 126;
     this.drumOn = true;
     this.recording = false;
 
-    // Default routing: krar → dry, masinko → reverb, washint → delay, kebero → dry
+    // Default routing: khaen → dry, phin → reverb, so → delay, klong → dry
     this.route = new Float32Array(16);
     this.route[0] = 0.9; this.route[1] = 0.2;
     this.route[5] = 0.8; this.route[4] = 0.3;
-    this.route[10] = 0.7; this.route[9] = 0.3;
+    this.route[10] = 0.7; this.route[9] = 0.3; this.route[8] = 0.5;
     this.route[12] = 0.9; this.route[15] = 0.2;
 
     this.router = new QubitRouter();
@@ -79,11 +74,31 @@ class LocalEngine {
     this._chunks = [];
   }
 
+  // Tonic of the current lai, octave 3 — the khaen's drone and the klong's pitch.
+  get root() { return Tuning.hz(Tuning.tonicMidi(this.mode)); }
+
   pitchFor(t, intensity) {
-    const scale = MODE_SCALES[this.mode] || MODE_SCALES[1];
-    const step = Math.min(scale.length - 1, Math.floor(Math.min(Math.max(t, 0), 0.999) * scale.length));
+    const n = Tuning.lai(this.mode).steps.length;
+    const step = Math.min(n - 1, Math.floor(Math.min(Math.max(t, 0), 0.999) * n));
     const octave = Math.floor(Math.min(Math.max(intensity, 0), 1) * 2) - 1; // -1..+1
-    return { step, hz: this.root * Math.pow(2, scale[step] / 12 + octave) };
+    const midi = Tuning.degreeMidi(this.mode, step) + 12 * octave;
+    return { step: midi, midi, hz: Tuning.hz(midi) };
+  }
+
+  // Called whenever lai, key or temperament changes.
+  retune() {
+    this.synth.setDrone(this.root);
+  }
+
+  // Strike/glide a voice to an absolute pitch. Plucked voices (phin, klong)
+  // re-strike on every new note; sustained ones (khaen, so) glide legato.
+  _play(v, midi, hz, vel) {
+    const s = this.synth;
+    const plucked = v === 1 || v === 3;
+    if (!this.gate[v] || (plucked && midi !== this.note[v])) s.noteOn(v, hz, clamp(vel, 0.2, 1));
+    else if (midi !== this.note[v]) s.setPitch(v, hz);
+    this.gate[v] = true;
+    this.note[v] = midi;
   }
 
   handle(msg) {
@@ -94,7 +109,6 @@ class LocalEngine {
         switch (msg.id) {
           case 'master': this.master = clamp(v, 0, 1); s.setMaster(this.master); break;
           case 'chaos': this.chaos = clamp(v, 0, 1); break;
-          case 'root': this.root = Math.max(20, v); break;
           case 'reverb_mix': this.reverbMix = clamp(v, 0, 1); s.setReverbMix(this.reverbMix); break;
           case 'delay_fb': this.delayFb = clamp(v, 0, 0.92); s.setDelayFeedback(this.delayFb); break;
           case 'bpm': this.bpm = clamp(v, 30, 240); s.setDelayTime(Math.min(1.5, 60 / this.bpm)); break;
@@ -105,7 +119,13 @@ class LocalEngine {
         if (msg.id === 'drum') this.drumOn = !this.drumOn;
         break;
       case 'mode':
-        this.mode = clamp(msg.value | 0, 1, 4);
+        this.mode = clamp(msg.value | 0, 1, LAI_COUNT);
+        this.retune();
+        break;
+      case 'tuning':
+        if (msg.temperament && TEMPERAMENTS[msg.temperament]) Tuning.temperament = msg.temperament;
+        if (typeof msg.transpose === 'number') Tuning.transpose = clamp(msg.transpose | 0, -6, 6);
+        this.retune();
         break;
       case 'route':
         if (msg.voice < 4 && msg.bus < 4) this.route[msg.voice * 4 + msg.bus] = clamp(msg.value, 0, 1);
@@ -113,12 +133,18 @@ class LocalEngine {
       case 'lissajous': {
         const v = msg.voice;
         if (!(v >= 0 && v < 4)) return;
-        const { step, hz } = this.pitchFor(msg.t, msg.intensity);
-        const plucked = v === 0 || v === 3;
-        if (!this.gate[v] || (plucked && step !== this.note[v])) s.noteOn(v, hz, clamp(msg.intensity, 0.2, 1));
-        else if (step !== this.note[v]) s.setPitch(v, hz);
-        this.gate[v] = true;
-        this.note[v] = step;
+        const { midi, hz } = this.pitchFor(msg.t, msg.intensity);
+        this._play(v, midi, hz, msg.intensity);
+        break;
+      }
+      case 'note': {
+        const v = msg.voice;
+        if (!(v >= 0 && v < 4)) return;
+        if (msg.gate === false) {
+          if (this.note[v] === msg.midi) this.handle({ type: 'voice', voice: v, gate: false });
+          return;
+        }
+        this._play(v, msg.midi, msg.hz || Tuning.hz(msg.midi), msg.velocity ?? 0.8);
         break;
       }
       case 'voice':
@@ -155,10 +181,13 @@ class LocalEngine {
     const now = ctx.currentTime;
     if (this._nextDrumTime < now) this._nextDrumTime = now + 0.05;
     while (this._nextDrumTime < now + 0.12) {
-      const vel = KEBERO_PATTERN[this._drumStep % KEBERO_PATTERN.length];
-      if (this.drumOn && vel > 0) {
-        const pitch = this.root * (this._drumStep % 6 === 0 ? 1 : 1.5);
-        this.synth.voices[3].noteOn(pitch, vel * 0.8, this._nextDrumTime);
+      const i = this._drumStep % KLONG_PATTERN.length;
+      if (this.drumOn) {
+        const kv = KLONG_PATTERN[i], cv = CHING_PATTERN[i];
+        const pitch = this.root * (i % 8 === 0 ? 1 : 1.5);
+        if (kv > 0) this.synth.voices[3].noteOn(pitch, kv * 0.8, this._nextDrumTime);
+        // open ching rings on the strong off-beats, closed chap on the rest
+        if (cv > 0) this.synth.ching(cv, cv > 0.8, this._nextDrumTime);
       }
       this._drumStep++;
       this._nextDrumTime += stepDur;
@@ -177,7 +206,7 @@ class LocalEngine {
       const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `tezeta-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
+      a.download = `morlam-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     };
@@ -192,12 +221,10 @@ class LocalEngine {
     this.recording = false;
   }
 
-  // Same shape as the server's WS `tick` message.
-  tick() {
+  // Everything the HUD needs to draw, ~30×/s.
+  snapshot() {
     const q = Array.from(this.router.coeffs);
     return {
-      type: 'tick',
-      in_level: 0,
       out_level: this.outLevel,
       recording: this.recording,
       drum_on: this.drumOn,

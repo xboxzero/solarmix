@@ -1,8 +1,8 @@
-// tezeta Web Audio synth engine
-// Browser port of the four DSP voices (krar, masinko, washint, kebero) with
+// morlam Web Audio synth engine
+// Four mor lam voices (khaen, phin, so, klong) plus a ching cymbal, through
 // the same 4×4 voice → bus patchbay as the Rust engine: DRY · REV · DLY · DARK.
 
-class TezetaSynth {
+class MorlamSynth {
   constructor() {
     this.ctx = null;
     this.audioContext = null;
@@ -75,7 +75,7 @@ class TezetaSynth {
     const buses = [dry, rev, dly, dark];
 
     // ---- voices, each fanned out to the 4 buses ----
-    const voiceClasses = [KrarVoice, MasinkoVoice, WashintVoice, KeberoVoice];
+    const voiceClasses = [KhaenVoice, PhinVoice, SoVoice, KlongVoice];
     for (let v = 0; v < 4; v++) {
       const out = ctx.createGain();
       out.gain.value = 0.6;
@@ -86,6 +86,7 @@ class TezetaSynth {
         this.sendGains[v * 4 + b] = s;
       }
       this.voices[v] = new voiceClasses[v](ctx, out);
+      if (v === 3) this._chingOut = out; // ching shares the klong's sends
     }
 
     this.isInitialized = true;
@@ -115,6 +116,27 @@ class TezetaSynth {
   noteOn(voice, hz, velocity = 1) { if (this.isInitialized) this.voices[voice]?.noteOn(hz, velocity); }
   noteOff(voice) { if (this.isInitialized) this.voices[voice]?.noteOff(); }
   setPitch(voice, hz) { if (this.isInitialized) this.voices[voice]?.setPitch(hz); }
+  setDrone(hz) { if (this.isInitialized) this.voices[0]?.setDrone(hz); }
+
+  // ching — small bronze finger cymbals. Six inharmonic squares through a
+  // highpass give the metallic shimmer; `open` lets it ring ("ching"),
+  // otherwise it is damped ("chap").
+  ching(vel = 0.7, open = false, when) {
+    if (!this.isInitialized) return;
+    const ctx = this.ctx, t = when ?? ctx.currentTime;
+    const len = open ? 0.35 : 0.06;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 9000; bp.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.18 * vel, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    hp.connect(bp); bp.connect(g); g.connect(this._chingOut);
+    for (const r of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
+      const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = 410 * r;
+      o.connect(hp); o.start(t); o.stop(t + len + 0.02);
+    }
+  }
   setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
   setSendLevel(voice, bus, level) { const g = this.sendGains[voice * 4 + bus]; if (g) this._ramp(g.gain, level, 0.05); }
   setReverbMix(mix) { if (this.revReturn) this._ramp(this.revReturn.gain, mix * 3, 0.05); }
@@ -148,111 +170,133 @@ function noiseBuffer(ctx, seconds) {
   return buf;
 }
 
-// krar — plucked lyre: bright saw + square through a decaying lowpass.
-class KrarVoice {
+// khaen — bamboo free-reed mouth organ. Reeds are rich in odd harmonics
+// (square + saw through a resonant lowpass); the player's breath pulses the
+// tone. Two drone pipes hold the lai's tonic and fifth under the melody.
+class KhaenVoice {
+  constructor(ctx, output) {
+    this.ctx = ctx;
+    this.osc = ctx.createOscillator(); this.osc.type = 'square';
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 6;
+    const m1 = ctx.createGain(); m1.gain.value = 0.55;
+    const m2 = ctx.createGain(); m2.gain.value = 0.35;
+    this.drone = ctx.createOscillator(); this.drone.type = 'square';
+    this.drone5 = ctx.createOscillator(); this.drone5.type = 'sawtooth';
+    const dg = ctx.createGain(); dg.gain.value = 0.22;
+    const dg5 = ctx.createGain(); dg5.gain.value = 0.12;
+    this.lp = ctx.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = 2200; this.lp.Q.value = 2.5;
+    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 1500; body.Q.value = 2; body.gain.value = 5;
+    // breath pulse: ~6 Hz tremolo
+    const trem = ctx.createOscillator(); trem.frequency.value = 6.2;
+    const tremDepth = ctx.createGain(); tremDepth.gain.value = 0.18;
+    const tremGain = ctx.createGain(); tremGain.gain.value = 0.82;
+    trem.connect(tremDepth); tremDepth.connect(tremGain.gain);
+    this.env = ctx.createGain(); this.env.gain.value = 0;
+    const lvl = ctx.createGain(); lvl.gain.value = 0.32;
+    this.osc.connect(m1); this.osc2.connect(m2);
+    this.drone.connect(dg); this.drone5.connect(dg5);
+    for (const n of [m1, m2, dg, dg5]) n.connect(this.lp);
+    this.lp.connect(body); body.connect(tremGain); tremGain.connect(this.env);
+    this.env.connect(lvl); lvl.connect(output);
+    this.setDrone(110);
+    for (const o of [this.osc, this.osc2, this.drone, this.drone5, trem]) o.start();
+  }
+  setDrone(hz) {
+    const t = this.ctx.currentTime;
+    this.drone.frequency.setTargetAtTime(hz, t, 0.05);
+    this.drone5.frequency.setTargetAtTime(hz * 1.5, t, 0.05);
+  }
+  setPitch(hz) {
+    const t = this.ctx.currentTime;
+    this.osc.frequency.setTargetAtTime(hz, t, 0.012);
+    this.osc2.frequency.setTargetAtTime(hz, t, 0.012);
+  }
+  noteOn(hz, vel) {
+    if (hz) this.setPitch(hz);
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(vel, t, 0.025);
+  }
+  noteOff() {
+    const t = this.ctx.currentTime, g = this.env.gain;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(0, t, 0.12);
+  }
+}
+
+// phin — fretted lute, played amplified in modern mor lam: a bright pluck
+// with a fast filter decay, pushed into a little overdrive.
+class PhinVoice {
   constructor(ctx, output) {
     this.ctx = ctx;
     this.osc = ctx.createOscillator(); this.osc.type = 'sawtooth';
-    this.osc2 = ctx.createOscillator(); this.osc2.type = 'square'; this.osc2.detune.value = 7;
-    const mix2 = ctx.createGain(); mix2.gain.value = 0.3;
-    this.lp = ctx.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = 400; this.lp.Q.value = 4;
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'triangle'; this.osc2.detune.value = 1200; // octave course
+    const mix2 = ctx.createGain(); mix2.gain.value = 0.25;
+    this.lp = ctx.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = 600; this.lp.Q.value = 6;
+    const drive = ctx.createWaveShaper(); drive.curve = softClip(3);
     this.env = ctx.createGain(); this.env.gain.value = 0;
+    const lvl = ctx.createGain(); lvl.gain.value = 0.4;
     this.osc.connect(this.lp); this.osc2.connect(mix2); mix2.connect(this.lp);
-    this.lp.connect(this.env); this.env.connect(output);
+    this.lp.connect(this.env); this.env.connect(drive); drive.connect(lvl); lvl.connect(output);
     this.osc.start(); this.osc2.start();
   }
   setPitch(hz) {
     const t = this.ctx.currentTime;
-    this.osc.frequency.setTargetAtTime(hz, t, 0.005);
-    this.osc2.frequency.setTargetAtTime(hz, t, 0.005);
+    this.osc.frequency.setTargetAtTime(hz, t, 0.004);
+    this.osc2.frequency.setTargetAtTime(hz, t, 0.004);
   }
   noteOn(hz, vel) {
     const t = this.ctx.currentTime;
     if (hz) { this.osc.frequency.setValueAtTime(hz, t); this.osc2.frequency.setValueAtTime(hz, t); }
     const g = this.env.gain, f = this.lp.frequency;
     g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
-    g.linearRampToValueAtTime(0.5 * vel, t + 0.004);
-    g.setTargetAtTime(0, t + 0.004, 0.45);
-    f.cancelScheduledValues(t); f.setValueAtTime(5500, t);
-    f.setTargetAtTime(500, t, 0.18);
+    g.linearRampToValueAtTime(0.9 * vel, t + 0.003);
+    g.setTargetAtTime(0, t + 0.003, 0.32);
+    f.cancelScheduledValues(t); f.setValueAtTime(7000, t);
+    f.setTargetAtTime(700, t, 0.09);
   }
-  noteOff() { this.env.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2); }
+  noteOff() { this.env.gain.setTargetAtTime(0, this.ctx.currentTime, 0.15); }
 }
 
-// masinko — bowed single-string fiddle: detuned saws, vibrato, nasal body.
-class MasinkoVoice {
+// so — two-string coconut-shell fiddle: detuned saws, wide vibrato,
+// a nasal shell resonance.
+class SoVoice {
   constructor(ctx, output) {
     this.ctx = ctx;
     this.osc = ctx.createOscillator(); this.osc.type = 'sawtooth';
-    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 9;
-    const vib = ctx.createOscillator(); vib.frequency.value = 5.5;
-    const vibDepth = ctx.createGain(); vibDepth.gain.value = 14; // cents
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 11;
+    const vib = ctx.createOscillator(); vib.frequency.value = 6.0;
+    const vibDepth = ctx.createGain(); vibDepth.gain.value = 18; // cents
     vib.connect(vibDepth); vibDepth.connect(this.osc.detune); vibDepth.connect(this.osc2.detune);
-    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 1100; body.Q.value = 3; body.gain.value = 9;
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 1;
+    const shell = ctx.createBiquadFilter(); shell.type = 'peaking'; shell.frequency.value = 1300; shell.Q.value = 4; shell.gain.value = 10;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3000; lp.Q.value = 1;
     this.env = ctx.createGain(); this.env.gain.value = 0;
-    const lvl = ctx.createGain(); lvl.gain.value = 0.22;
-    this.osc.connect(body); this.osc2.connect(body); body.connect(lp); lp.connect(this.env);
+    const lvl = ctx.createGain(); lvl.gain.value = 0.3;
+    this.osc.connect(shell); this.osc2.connect(shell); shell.connect(lp); lp.connect(this.env);
     this.env.connect(lvl); lvl.connect(output);
     this.osc.start(); this.osc2.start(); vib.start();
   }
   setPitch(hz) {
-    const t = this.ctx.currentTime;
-    this.osc.frequency.setTargetAtTime(hz, t, 0.04);
-    this.osc2.frequency.setTargetAtTime(hz, t, 0.04);
+    const t = this.ctx.currentTime, f = hz * 2; // fiddle sits an octave up
+    this.osc.frequency.setTargetAtTime(f, t, 0.04);
+    this.osc2.frequency.setTargetAtTime(f, t, 0.04);
   }
   noteOn(hz, vel) {
     if (hz) this.setPitch(hz);
     const t = this.ctx.currentTime, g = this.env.gain;
     g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
-    g.setTargetAtTime(vel, t, 0.06);
+    g.setTargetAtTime(vel, t, 0.05);
   }
   noteOff() {
     const t = this.ctx.currentTime, g = this.env.gain;
     g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
-    g.setTargetAtTime(0, t, 0.35);
+    g.setTargetAtTime(0, t, 0.3);
   }
 }
 
-// washint — bamboo flute: soft triangle tone plus breath noise at the pitch.
-class WashintVoice {
-  constructor(ctx, output) {
-    this.ctx = ctx;
-    this.osc = ctx.createOscillator(); this.osc.type = 'triangle';
-    const vib = ctx.createOscillator(); vib.frequency.value = 4.8;
-    const vibDepth = ctx.createGain(); vibDepth.gain.value = 10;
-    vib.connect(vibDepth); vibDepth.connect(this.osc.detune);
-    const noise = ctx.createBufferSource(); noise.buffer = noiseBuffer(ctx, 2); noise.loop = true;
-    this.bp = ctx.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.frequency.value = 880; this.bp.Q.value = 12;
-    const breath = ctx.createGain(); breath.gain.value = 0.9;
-    const tone = ctx.createGain(); tone.gain.value = 0.45;
-    this.env = ctx.createGain(); this.env.gain.value = 0;
-    this.osc.connect(tone); tone.connect(this.env);
-    noise.connect(this.bp); this.bp.connect(breath); breath.connect(this.env);
-    this.env.connect(output);
-    this.osc.start(); vib.start(); noise.start();
-  }
-  setPitch(hz) {
-    const t = this.ctx.currentTime, f = hz * 2; // flute sits an octave up
-    this.osc.frequency.setTargetAtTime(f, t, 0.03);
-    this.bp.frequency.setTargetAtTime(f, t, 0.03);
-  }
-  noteOn(hz, vel) {
-    if (hz) this.setPitch(hz);
-    const t = this.ctx.currentTime, g = this.env.gain;
-    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
-    g.setTargetAtTime(0.6 * vel, t, 0.07);
-  }
-  noteOff() {
-    const t = this.ctx.currentTime, g = this.env.gain;
-    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
-    g.setTargetAtTime(0, t, 0.25);
-  }
-}
-
-// kebero — hand drum: pitch-dropping sub thump + filtered noise slap.
+// klong — barrel drum: pitch-dropping body thump + a skin slap.
 // Each hit spawns short-lived nodes so overlapping hits ring out naturally.
-class KeberoVoice {
+class KlongVoice {
   constructor(ctx, output) {
     this.ctx = ctx; this.output = output;
     this.noise = noiseBuffer(ctx, 0.5);
@@ -263,24 +307,30 @@ class KeberoVoice {
     const ctx = this.ctx, t = when ?? ctx.currentTime;
     const base = Math.max(45, Math.min(160, (hz || this.pitch) / 2));
     const o = ctx.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(base * 2.2, t);
-    o.frequency.exponentialRampToValueAtTime(base, t + 0.08);
+    o.frequency.setValueAtTime(base * 2.6, t);
+    o.frequency.exponentialRampToValueAtTime(base, t + 0.06);
     const og = ctx.createGain();
     og.gain.setValueAtTime(0.0001, t);
-    og.gain.exponentialRampToValueAtTime(0.9 * vel, t + 0.003);
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    og.gain.exponentialRampToValueAtTime(0.95 * vel, t + 0.003);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.38);
     o.connect(og); og.connect(this.output);
-    o.start(t); o.stop(t + 0.5);
+    o.start(t); o.stop(t + 0.42);
 
     const n = ctx.createBufferSource(); n.buffer = this.noise;
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.9;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2200; bp.Q.value = 1.1;
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.5 * vel, t);
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    ng.gain.setValueAtTime(0.45 * vel, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
     n.connect(bp); bp.connect(ng); ng.connect(this.output);
-    n.start(t); n.stop(t + 0.15);
+    n.start(t); n.stop(t + 0.1);
   }
   noteOff() {}
 }
 
-window.TezetaSynth = TezetaSynth;
+function softClip(k) {
+  const n = 1024, c = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); }
+  return c;
+}
+
+window.MorlamSynth = MorlamSynth;
