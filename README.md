@@ -1,10 +1,12 @@
 # morlam · หมอลำ khaen machine
 
 > A mor lam synth that runs entirely in your browser — no server, no install.
-> Play it from a built-in well-tempered pentatonic keyboard or by touching a
-> 3D Lissajous curve, through a hand-controlled FX rack (gain, amp, modulation,
-> parallel wet-dry-wet mixer, IR cabinet/room simulation). The interface is a riveted steel machine panel:
-> brushed plates, hazard stripes, amber LCDs, LED toggles.
+> Play it from a built-in well-tempered pentatonic keyboard or by touching
+> the world's submarine fibre-optic cables on a 3D globe, through a
+> hand-controlled FX rack (gain, amp, modulation, a parallel wet-dry-wet
+> mixer with phase shifters and drive, IR simulation) and a step-sequenced
+> drum machine. Minimal industrial look: flat warm grey, hairlines, one
+> orange accent.
 >
 > **Play:** https://xboxzero.github.io/solarmix/
 
@@ -66,15 +68,30 @@ chaos = 0 ─► routing follows the base matrix exactly
 chaos = 1 ─► routing follows the qubit-entangled coefficients
 ```
 
+## The globe
+
+The 3D view is the Earth with every submarine fibre-optic cable on
+TeleGeography's Submarine Cable Map (about 700 systems) and their landing
+stations. **Each cable is a string you can play:** touch it and the voice
+sounds; the position along the cable, from one end to the other, picks one of
+the five notes of the current lai. The struck cable lights up in the voice's
+colour and its name appears in the side panel. Drag anywhere off the cables to
+turn the globe; left alone it drifts slowly.
+
 ## FX rack
 
-Press **FX RACK** to open the effects rack. Everything in it is manual: drag
-a knob or fader up/down (hold Shift for fine moves), use the mouse wheel to
-nudge it, and double-click to reset.
+Press **Effects** to open the effects rack. Everything in it is manual:
+
+- **Knobs:** drag up/down *or* left/right (hold Shift for fine moves), scroll
+  to nudge, double-click to reset, or click the value to type an exact number.
+  Arrow keys work when a knob has focus.
+- **Faders:** click anywhere on the track to jump there, or drag.
 
 ```
-voice ─► GAIN ─► AMP ─►  SEND MATRIX  ─►  WET L · DRY · WET R · MOD  ─► IR SIM ─► master
-         (one insert chain per voice)      (parallel mixer channels)
+voice ─► GAIN ─► AMP ─► SEND MATRIX ─┬─► WET L  reverb → phase shifter ──┐
+         (insert chain per voice)     ├─► DRY    drive → compressor ───────┤
+                                      ├─► WET R  delay → phase shifter ───┼─► IR SIM ─► master
+                                      └─► MOD    chorus/flanger/phaser ───┘
 ```
 
 | Unit | Controls |
@@ -82,7 +99,7 @@ voice ─► GAIN ─► AMP ─►  SEND MATRIX  ─►  WET L · DRY · WET R 
 | **GAIN** | INPUT (0…+30 dB), DRIVE, CLIP (soft / hard / fuzz), ON |
 | **AMP** | BASS, MID, TREBLE, PRESENCE (±dB), LEVEL, ON |
 | **MOD** | TYPE (chorus / flanger / phaser), RATE, DEPTH, FEEDBACK, ON |
-| **W·D·W MIXER** | Four parallel channels, each with its own fader, pan, mute, solo and meter. **WET L** is a 100% wet reverb (SIZE, DECAY, PRE-delay, TONE). **DRY** is the direct sound. **WET R** is a 100% wet delay (TIME, FEEDBACK, TONE, SYNC to a dotted 8th at the current BPM). **MOD** is the 100% wet output of the MOD unit. |
+| **MIXER** | Four parallel channels, each with its own fader, pan, mute, solo and meter. **WET L**: 100% wet reverb (SIZE, DECAY, PRE-delay, TONE) into a **phase shifter** (ON, RATE, DEPTH, FEEDBACK, MIX). **DRY**: a drive stage — CLEAN, LOW GAIN (soft overdrive) or HI GAIN (tightened, two-stage, mid-scooped) with GAIN, TONE, LEVEL — then a COMPRESSOR (ON, THRESHOLD, RATIO). **WET R**: 100% wet delay (TIME, FEEDBACK, TONE, SYNC to a dotted 8th at the tempo) into its own **phase shifter**, sweeping opposite to WET L's. **MOD**: the 100% wet output of the Modulation unit. |
 | **SEND MATRIX** | How much of each voice goes into each channel (16 knobs) |
 | **IR SIM** | The last stage: a convolution impulse response, either built in (CAB 1×12 / 2×12 / 4×12, small room, hall, plate, spring) or your own file (**LOAD IR…**, any WAV/AIFF the browser can decode), with MIX (dry ⇄ IR) and LEVEL |
 
@@ -92,6 +109,19 @@ them wet-left / dry-center / wet-right.
 **CHAOS** starts at 0, so the sends follow the matrix exactly. Raising it
 blends in the drifting 4-qubit router. The patchbay wires on screen always
 show the sends actually in use.
+
+## Drum machine
+
+Press **Drums** (or the *Drum machine* tab in the rack). **Groove** starts and
+stops it.
+
+- Six tracks: KLONG (barrel drum, tuned to the lai), SLAP, KICK, SNARE, CHING
+  (open cymbal) and CHAP (closed cymbal).
+- 16 sixteenth-note steps. Click or drag across steps to paint them, scroll on
+  a step to set its velocity, right-click to cycle soft → medium → accent.
+- Per track: mute, LEVEL, TUNE (±12 semitones), DECAY.
+- Pattern: PRESET (Lam sing, Lam toei, Lam phloen, Classic, Empty), LENGTH
+  (4/8/12/16 steps), SWING, CLEAR. The playhead shows the step that is sounding.
 
 ## Run it
 
@@ -111,16 +141,16 @@ Works in current Chrome, Firefox, Edge and Safari 16.4+, desktop or mobile.
 | Surface | Gesture |
 | --- | --- |
 | Keyboard | Play the active voice in the current lai (touch, mouse, or Z…/ and Q…Y) |
-| 3D Lissajous curve | Touch on the curve to strike the active voice at that point; drag off it to orbit |
-| Voice buttons | Pick which voice (khaen/phin/so/klong) the keyboard and curve play |
+| Globe | Touch a submarine cable to play the active voice; position along the cable picks the note; drag off the cables to turn the globe |
+| Voice buttons | Pick which voice (khaen/phin/so/klong) the keyboard and globe play |
 | Lai buttons | Switch lai (YAI / NOI / SUTSANAEN / PO SAI / SOI) |
 | TEMPERAMENT · KEY | Pick the well temperament and transpose the lai |
-| FX RACK | Open the effects rack (see above) |
+| Effects · Drums | Open the rack on the effects or drum machine page |
 | CHAOS | Blend the manual send matrix ↔ qubit-entangled routing |
 | BPM | Groove tempo (and synced delay time) |
 | MASTER | Master output volume |
 | Patchbay (right) | 16 wires showing the live voice → channel send levels |
-| KLONG + CHING | Toggle the groove |
+| Groove | Start / stop the drum machine |
 | REC | Record the output; stopping downloads the take as an audio file |
 
 ## Files
@@ -131,15 +161,27 @@ static/
 ├── style.css           # steel machine-panel theme
 ├── tuning.js           # lai + well-temperament tables
 ├── synth.js            # Web Audio voices, ching, send matrix
-├── fx.js               # FX rig: gain/amp inserts, W-D-W mixer, mod, IR sim
-├── fxrack.js           # FX rack UI: knobs, faders, switches, meters
-├── engine.js           # state, qubit router, pitch mapping, groove, recorder
-├── app.js              # Three.js scene, keyboard, patchbay overlay, HUD
+├── fx.js               # FX rig: gain/amp inserts, W-D-W mixer, phasers, drive, IR sim
+├── fxrack.js           # rack UI: effects page + drum machine page
+├── engine.js           # state, qubit router, pitch mapping, drum sequencer, recorder
+├── app.js              # scene, keyboard, patchbay overlay, HUD
+├── globe.js            # 3D Earth + submarine cables, cable picking
+├── data/               # cables.json, landing.json, land.json (see Credits)
 └── vendor/three.module.js
 ```
 
 The earlier Raspberry Pi / Rust / Pure Data engine has been removed from the
 tree; it's still in the git history if it's ever needed again.
+
+## Credits
+
+- **Submarine cables and landing stations:** [TeleGeography Submarine Cable
+  Map](https://www.submarinecablemap.com/), licensed CC BY-NC-SA 3.0
+  (non-commercial, attribution, share-alike). The files in `static/data/`
+  derived from it (`cables.json`, `landing.json`) stay under that licence.
+- **Coastlines:** [Natural Earth](https://www.naturalearthdata.com/) 1:110m
+  land, public domain, via the `world-atlas` package.
+- `tools/build_map_data.py` rebuilds `static/data/` from the source files.
 
 ## License
 

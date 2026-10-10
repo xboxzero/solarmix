@@ -1,22 +1,20 @@
-// morlam — 3D Lissajous touch UI, well-tempered pentatonic keyboard and an
-// SVG patchbay overlay.
+// morlam — 3D globe of submarine fibre-optic cables you play by touch, a
+// well-tempered pentatonic keyboard, an FX rack and a drum machine.
 //
-// • The Lissajous curve (x = sin(a·t+δ), y = sin(b·t), z = sin(c·t+φ)) lives in
-//   Three.js as a TubeGeometry. Three 'a', 'b', 'c' ratios are entangled with
-//   the qubit router in engine.js — the geometry breathes with them.
-// • Touch on the curve to play. The hit point is projected onto the closest
-//   parametric t, mapped to a 5-note window of the current lai, and played
-//   as { type:'note', voice, midi, hz, velocity }.
+// • The globe (globe.js) carries every submarine cable on the
+//   TeleGeography map. Touch a cable to play the active voice: the position
+//   along the cable (0 → 1) picks one of the five notes of the current lai.
+//   Drag off the cables to turn the globe.
 // • The keyboard lays the current lai out over three octaves; every pitch is
 //   tuned to the selected well temperament (tuning.js).
-// • The SVG patchbay overlay shows the 16 qubit-driven send levels as wires
-//   between voice nodes (right) and bus nodes (left).
+// • The SVG patchbay overlay shows the 16 voice → channel send levels.
 //
 // Everything runs in the browser: LocalEngine (engine.js) holds the state and
 // the MorlamSynth (synth.js) plays through Web Audio. No server needed.
 
 import * as THREE from './vendor/three.module.js';
 import { buildRack } from './fxrack.js';
+import { Globe } from './globe.js';
 
 // =====================================================================
 // Web Audio Synth
@@ -122,104 +120,40 @@ try {
 if (!renderer) throw new Error('WebGL renderer initialization failed');
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x0b0d10, 1);
+renderer.setClearColor(0xe4e2dd, 1);
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0b0d10, 9, 30);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 9);
 camera.lookAt(0, 0, 0);
 
 // lights
-scene.add(new THREE.HemisphereLight(0xdfe6ee, 0x1a1c20, 0.9));
+scene.add(new THREE.HemisphereLight(0xffffff, 0xd9d6cf, 1.2));
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(5, 6, 5); scene.add(key);
-const fill = new THREE.DirectionalLight(0xffb000, 0.8); fill.position.set(-6, 2, 3); scene.add(fill);
-const rim = new THREE.PointLight(0xff5a1f, 1.2, 30); rim.position.set(-5, -3, -2); scene.add(rim);
+const fill = new THREE.DirectionalLight(0xfff1e0, 0.6); fill.position.set(-6, 2, 3); scene.add(fill);
+const rim = new THREE.PointLight(0xff5a00, 0.6, 30); rim.position.set(-5, -3, -2); scene.add(rim);
 
 // =====================================================================
-// Lissajous 3D curve
+// Globe
 // =====================================================================
-class LissajousCurve extends THREE.Curve {
-  constructor(a, b, c, dPhase, ePhase) {
-    super();
-    this.a = a; this.b = b; this.c = c;
-    this.dPhase = dPhase; this.ePhase = ePhase;
-    this.scale = 2.6;
-  }
-  getPoint(t, opt) {
-    const u = t * Math.PI * 2;
-    const x = Math.sin(this.a * u + this.dPhase);
-    const y = Math.sin(this.b * u);
-    const z = Math.sin(this.c * u + this.ePhase);
-    const p = opt || new THREE.Vector3();
-    return p.set(x * this.scale, y * this.scale, z * this.scale);
-  }
-}
-
-let lissA = 3, lissB = 2, lissC = 5;
-let curve = new LissajousCurve(lissA, lissB, lissC, Math.PI / 2, 0);
-let curveSegments = 320;
-
-// polished steel cable that glows amber-hot with the output level
-const tubeMat = new THREE.MeshStandardMaterial({
-  color: 0xb8c0c8, emissive: 0xff7a00, emissiveIntensity: 0.25,
-  metalness: 0.9, roughness: 0.28, flatShading: false,
-});
-let tubeMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, curveSegments, 0.06, 12, false), tubeMat);
-scene.add(tubeMesh);
-
-// ghost outline (extra glow)
-const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffb000, transparent: true, opacity: 0.08, side: THREE.BackSide });
-let ghostMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, curveSegments, 0.18, 12, false), ghostMat);
-scene.add(ghostMesh);
-
-function rebuildCurve() {
-  curve = new LissajousCurve(lissA, lissB, lissC, Math.PI / 2, 0);
-  tubeMesh.geometry.dispose();
-  tubeMesh.geometry = new THREE.TubeGeometry(curve, curveSegments, 0.06, 12, false);
-  ghostMesh.geometry.dispose();
-  ghostMesh.geometry = new THREE.TubeGeometry(curve, curveSegments, 0.18, 12, false);
-}
-
-// Machined cogs turning slowly behind the curve.
-function makeGear(teeth, rOuter, rInner, rHole, depth) {
-  const shape = new THREE.Shape();
-  const n = teeth * 4;
-  for (let i = 0; i <= n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const r = (i % 4 === 0 || i % 4 === 1) ? rOuter : rInner;
-    const x = Math.cos(a) * r, y = Math.sin(a) * r;
-    if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
-  }
-  const hole = new THREE.Path();
-  hole.absarc(0, 0, rHole, 0, Math.PI * 2, true);
-  shape.holes.push(hole);
-  return new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 1, curveSegments: 24 });
-}
-const gearMat = new THREE.MeshStandardMaterial({ color: 0x4a525b, metalness: 0.85, roughness: 0.45 });
-const gears = [
-  { mesh: new THREE.Mesh(makeGear(28, 4.6, 4.25, 3.7, 0.18), gearMat), spin: 0.05 },
-  { mesh: new THREE.Mesh(makeGear(14, 2.2, 1.9, 0.9, 0.22), gearMat), spin: -0.1 },
-];
-gears[0].mesh.position.set(0, 0, -4.5);
-gears[1].mesh.position.set(5.1, -3.6, -4.6);
-for (const g of gears) scene.add(g.mesh);
+const globe = new Globe(scene);
+globe.load().catch(e => showError('Map data failed to load: ' + e.message));
 
 // Touch handles — one per voice (khaen, phin, so, klong)
-const voiceColors = [0xffb000, 0xe3e8ed, 0x39ff6a, 0xff5a1f];
+const voiceColors = [0xff5a00, 0x1d1d1b, 0x7a7770, 0xc4320a];
 const voiceLabels = ['khaen', 'phin', 'so', 'klong'];
 const handles = voiceColors.map((c, i) => {
-  const g = new THREE.SphereGeometry(0.18, 18, 18);
+  const g = new THREE.SphereGeometry(0.07, 18, 18);
   const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.7, metalness: 0.6, roughness: 0.25 });
   const mesh = new THREE.Mesh(g, m);
-  mesh.userData = { voice: i, t: i * 0.25, intensity: 0.0 };
+  mesh.userData = { voice: i, intensity: 0.0 };
+  mesh.visible = false; // shown once the voice strikes a cable
   scene.add(mesh);
   return mesh;
 });
 
 function positionHandle(h) {
-  const p = curve.getPoint(h.userData.t);
-  h.position.copy(p);
-  const s = 0.6 + h.userData.intensity * 1.3;
+  const s = 1 + h.userData.intensity * 1.5;
   h.scale.setScalar(s);
 }
 
@@ -236,40 +170,10 @@ window.addEventListener('resize', resize);
 resize();
 
 // =====================================================================
-// Pointer / touch — pick closest point on the curve
+// Pointer / touch — pick the nearest cable
 // =====================================================================
-const raycaster = new THREE.Raycaster();
-const ndc = new THREE.Vector2();
 const activePointers = new Map(); // pointerId -> voice index
-
-function clientToNDC(x, y) { ndc.x = (x / window.innerWidth) * 2 - 1; ndc.y = -(y / window.innerHeight) * 2 + 1; }
-
-// Approximate nearest-t by sampling the curve coarsely (32 pts) and refining locally.
-const SAMPLE_N = 96;
-const sampleBuf = new Float32Array(SAMPLE_N * 3);
-function resampleBuf() {
-  const p = new THREE.Vector3();
-  for (let i = 0; i < SAMPLE_N; i++) {
-    curve.getPoint(i / (SAMPLE_N - 1), p);
-    sampleBuf[i*3] = p.x; sampleBuf[i*3+1] = p.y; sampleBuf[i*3+2] = p.z;
-  }
-}
-resampleBuf();
-
-function pickT(clientX, clientY) {
-  clientToNDC(clientX, clientY);
-  raycaster.setFromCamera(ndc, camera);
-  // Project each sample to screen; pick the one with min screen-space distance.
-  const tmp = new THREE.Vector3();
-  let bestI = 0, bestD = Infinity;
-  for (let i = 0; i < SAMPLE_N; i++) {
-    tmp.set(sampleBuf[i*3], sampleBuf[i*3+1], sampleBuf[i*3+2]).project(camera);
-    const dx = tmp.x - ndc.x, dy = tmp.y - ndc.y;
-    const d = dx*dx + dy*dy;
-    if (d < bestD) { bestD = d; bestI = i; }
-  }
-  return { t: bestI / (SAMPLE_N - 1), distSq: bestD };
-}
+const cableVal = document.getElementById('cable-val');
 
 function activeVoiceIndex() {
   // The voice currently "highlighted" in the UI; first .on voice button wins.
@@ -278,16 +182,21 @@ function activeVoiceIndex() {
 }
 
 function strikeAt(pointerId, clientX, clientY, intensity) {
-  const { t, distSq } = pickT(clientX, clientY);
-  if (distSq > 0.05) return; // too far from curve — ignore
+  const hit = globe.pick(clientX, clientY, camera, window.innerWidth, window.innerHeight);
+  if (!hit) return; // not on a cable
+  const t = hit.t;
   let voice = activePointers.get(pointerId);
   if (voice === undefined) {
     voice = activeVoiceIndex();
     activePointers.set(pointerId, voice);
   }
-  handles[voice].userData.t = t;
-  handles[voice].userData.intensity = intensity;
-  positionHandle(handles[voice]);
+  const h = handles[voice];
+  h.position.copy(hit.point);
+  h.visible = true;
+  h.userData.intensity = intensity;
+  positionHandle(h);
+  globe.highlight(voice, hit.cable, voiceColors[voice]);
+  if (cableVal) cableVal.textContent = hit.name;
 
   // Lai × temperament pitch mapping lives in LocalEngine + tuning.js.
   const { midi, hz } = engine.pitchFor(t, intensity);
@@ -315,18 +224,19 @@ canvas.addEventListener('pointerup',     e => release(e.pointerId));
 canvas.addEventListener('pointercancel', e => release(e.pointerId));
 canvas.addEventListener('pointerleave',  e => release(e.pointerId));
 
-// Camera orbit when dragging outside the curve (only when no active pointer is "on" the curve)
-let camYaw = 0, camPitch = 0.05;
+// Turn the globe when dragging off the cables
+let camYaw = 2.2, camPitch = 0.35, lastSpin = 0;
 let lastCam = null;
 canvas.addEventListener('pointerdown', e => {
   if (activePointers.has(e.pointerId)) return;
-  // we still get here only if the strike missed the curve; treat as orbit
+  // we still get here only if the strike missed every cable; treat as orbit
   lastCam = { x: e.clientX, y: e.clientY };
 });
 canvas.addEventListener('pointermove', e => {
   if (!lastCam || activePointers.has(e.pointerId)) return;
   const dx = e.clientX - lastCam.x; const dy = e.clientY - lastCam.y;
-  camYaw   += dx * 0.005;
+  camYaw   -= dx * 0.005;
+  lastSpin = performance.now();
   camPitch = Math.max(-1.1, Math.min(1.1, camPitch + dy * 0.005));
   lastCam = { x: e.clientX, y: e.clientY };
 });
@@ -366,7 +276,7 @@ function buildPatchbay() {
     for (let b = 0; b < 4; b++) {
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', '#ffb000');
+      path.setAttribute('stroke', '#ff5a00');
       path.setAttribute('stroke-width', '1');
       path.setAttribute('opacity', '0.2');
       svg.appendChild(path);
@@ -375,30 +285,27 @@ function buildPatchbay() {
   }
   const drawNode = (p, label, color) => {
     const c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 12);
-    c.setAttribute('fill', '#2b3036'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '2');
+    c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 9);
+    c.setAttribute('fill', '#f6f5f2'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '1.5');
     svg.appendChild(c);
-    // hex socket in the middle of each jack
-    const hex = document.createElementNS(SVG_NS, 'polygon');
-    hex.setAttribute('points', [0, 1, 2, 3, 4, 5].map(k => {
-      const a = Math.PI / 6 + k * Math.PI / 3;
-      return `${p.x + Math.cos(a) * 5},${p.y + Math.sin(a) * 5}`;
-    }).join(' '));
-    hex.setAttribute('fill', '#0b0d10');
-    svg.appendChild(hex);
+    // jack socket
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('cx', p.x); dot.setAttribute('cy', p.y); dot.setAttribute('r', 3);
+    dot.setAttribute('fill', color);
+    svg.appendChild(dot);
     const t = document.createElementNS(SVG_NS, 'text');
     t.setAttribute('x', p.x); t.setAttribute('y', p.y + 28);
     t.setAttribute('fill', color);
-    t.setAttribute('font-family', '"Share Tech Mono", ui-monospace, monospace');
+    t.setAttribute('font-family', '"IBM Plex Mono", ui-monospace, monospace');
     t.setAttribute('font-size', '9');
     t.setAttribute('text-anchor', 'middle');
     t.setAttribute('letter-spacing', '1.5');
     t.textContent = label;
     svg.appendChild(t);
   };
-  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#ffb000');
+  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#1d1d1b');
   const busLabels = CHANNEL_NAMES;
-  for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#c9cfd6');
+  for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#7a7770');
 }
 window.addEventListener('resize', buildPatchbay);
 buildPatchbay();
@@ -490,7 +397,7 @@ if (recBtn) {
 // =====================================================================
 const rackEl = $('rack');
 const rack = rackEl ? buildRack(rackEl, { engine, synth, send }) : null;
-const fxBtn = $('fx-btn');
+const fxBtn = $('fx-btn'), drumsBtn = $('drums-btn');
 function placeRack() {
   // the rack fills the space between the top bar and the bottom console
   const top = document.querySelector('.hud-top'), bot = document.querySelector('.hud-bot');
@@ -499,8 +406,19 @@ function placeRack() {
   rackEl.style.bottom = (bot ? window.innerHeight - bot.getBoundingClientRect().top + 6 : 220) + 'px';
 }
 if (fxBtn && rackEl) {
-  const sync = () => fxBtn.classList.toggle('on', !rackEl.hidden);
-  fxBtn.addEventListener('click', () => { rackEl.hidden = !rackEl.hidden; placeRack(); sync(); });
+  let page = 'fx';
+  const sync = () => {
+    fxBtn.classList.toggle('on', !rackEl.hidden && page === 'fx');
+    if (drumsBtn) drumsBtn.classList.toggle('on', !rackEl.hidden && page === 'drums');
+  };
+  // Effects / Drums buttons open the rack on their page, or close it if already there
+  const open = p => {
+    rackEl.hidden = !rackEl.hidden && page === p ? true : false;
+    page = p; rack.show(p); placeRack(); sync();
+  };
+  fxBtn.addEventListener('click', () => open('fx'));
+  if (drumsBtn) drumsBtn.addEventListener('click', () => open('drums'));
+  rackEl.addEventListener('click', e => { const t = e.target.closest('.tab'); if (t) { page = t.textContent.startsWith('Drum') ? 'drums' : 'fx'; sync(); } });
   new MutationObserver(sync).observe(rackEl, { attributes: true, attributeFilter: ['hidden'] });
   window.addEventListener('resize', placeRack);
   window.addEventListener('keydown', e => { if (e.key === 'Escape') rackEl.hidden = true; });
@@ -638,38 +556,29 @@ buildPatchbay();
 // Animate
 // =====================================================================
 const clock = new THREE.Clock();
-let smoothA = 3, smoothB = 2, smoothC = 5;
 let outLevelSmoothed = 0;
 
 let animationRunning = false;
 function animate() {
   try {
-    if (!renderer || !scene || !camera || !clock || !curve || !handles || !tubeMat) {
+    if (!renderer || !scene || !camera || !clock || !handles) {
       console.warn('animate: missing scene objects, skipping frame');
       if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(animate);
       return;
     }
 
     const dt = clock.getDelta();
-    // smooth toward server-reported Lissajous ratios
-    smoothA += (lissA - smoothA) * 0.05;
-    smoothB += (lissB - smoothB) * 0.05;
-    smoothC += (lissC - smoothC) * 0.05;
-    if (Math.abs(smoothA - curve.a) > 0.05 || Math.abs(smoothB - curve.b) > 0.05 || Math.abs(smoothC - curve.c) > 0.05) {
-      curve.a = smoothA; curve.b = smoothB; curve.c = smoothC;
-      rebuildCurve();
-      resampleBuf();
-    }
-    // orbit camera
-    const r = 9;
+    // orbit camera — back off on narrow (portrait) screens so the globe fits
+    const r = Math.max(9, 1.3 * 2.6 / (Math.tan(22.5 * Math.PI / 180) * Math.min(1, camera.aspect)));
     camera.position.x = Math.sin(camYaw) * Math.cos(camPitch) * r;
     camera.position.z = Math.cos(camYaw) * Math.cos(camPitch) * r;
     camera.position.y = Math.sin(camPitch) * r;
     camera.lookAt(0, 0, 0);
 
-    for (const g of gears) g.mesh.rotation.z += g.spin * dt * (1 + outLevelSmoothed * 6);
+    // slow drift once the globe has been left alone for a few seconds
+    if (!lastCam && performance.now() - lastSpin > 4000) camYaw += dt * 0.04;
 
-    // handles ride the curve
+    // voice markers pulse when struck
     if (handles && handles.length > 0) {
       handles.forEach(h => {
         if (h && h.userData) {
@@ -678,10 +587,7 @@ function animate() {
         }
       });
     }
-    // tube emissive responds to overall output level (set in onTick)
-    if (tubeMat && typeof outLevelSmoothed === 'number') {
-      tubeMat.emissiveIntensity = 0.15 + Math.max(0, Math.min(1.2, outLevelSmoothed * 1.5));
-    }
+    globe.update(outLevelSmoothed);
 
     renderer.render(scene, camera);
 
@@ -721,15 +627,7 @@ function updateHud(m) {
   const chaosVal = $('chaos-val');
   if (chaosVal && m.chaos !== undefined) chaosVal.textContent = Math.round((m.chaos || 0) * 100) + '%';
 
-  const lissVal = $('liss-val');
-  if (lissVal && m.liss_a !== undefined && m.liss_b !== undefined && m.liss_c !== undefined) {
-    lissVal.textContent = `${(m.liss_a || 0).toFixed(1)} : ${(m.liss_b || 0).toFixed(1)} : ${(m.liss_c || 0).toFixed(1)}`;
-  }
-
   outLevelSmoothed += ((m.out_level || 0) - outLevelSmoothed) * 0.18;
-  if (m.liss_a !== undefined) lissA = m.liss_a;
-  if (m.liss_b !== undefined) lissB = m.liss_b;
-  if (m.liss_c !== undefined) lissC = m.liss_c;
   if (m.sends) updateWires(m.sends);
   if (rack) rack.update(m);
 
