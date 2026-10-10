@@ -55,7 +55,7 @@ class MorlamSynth {
         this.sendGains[v * 4 + b] = s;
       }
       this.voices[v] = new voiceClasses[v](ctx, out);
-      if (v === 3) this._chingOut = out; // ching shares the klong's sends
+      if (v === 3) this.drums = new DrumKit(ctx, out); // drum machine shares the klong's sends
     }
 
     this.isInitialized = true;
@@ -71,25 +71,8 @@ class MorlamSynth {
   setPitch(voice, hz) { if (this.isInitialized) this.voices[voice]?.setPitch(hz); }
   setDrone(hz) { if (this.isInitialized) this.voices[0]?.setDrone(hz); }
 
-  // ching — small bronze finger cymbals. Six inharmonic squares through a
-  // highpass give the metallic shimmer; `open` lets it ring ("ching"),
-  // otherwise it is damped ("chap").
-  ching(vel = 0.7, open = false, when) {
-    if (!this.isInitialized) return;
-    const ctx = this.ctx, t = when ?? ctx.currentTime;
-    const len = open ? 0.35 : 0.06;
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 9000; bp.Q.value = 0.7;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.18 * vel, t + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-    hp.connect(bp); bp.connect(g); g.connect(this._chingOut);
-    for (const r of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
-      const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = 410 * r;
-      o.connect(hp); o.start(t); o.stop(t + len + 0.02);
-    }
-  }
+  // Drum machine hit: kind ∈ DrumKit sounds, `opt` = { tune (semitones), decay (×), root (Hz) }.
+  drum(kind, vel, when, opt) { if (this.isInitialized) this.drums.hit(kind, vel, when, opt); }
   setMaster(level) { if (this.masterGain) this._ramp(this.masterGain.gain, level, 0.05); }
   setSendLevel(voice, bus, level) { const g = this.sendGains[voice * 4 + bus]; if (g) this._ramp(g.gain, level, 0.05); }
   setFx(path, value) { if (this.fx) this.fx.set(path, value); }
@@ -278,6 +261,69 @@ class KlongVoice {
     n.start(t); n.stop(t + 0.1);
   }
   noteOff() {}
+}
+
+// Drum machine sounds. Every hit builds short-lived nodes, so hits overlap
+// and ring out naturally. All sounds go to the klong voice's sends.
+class DrumKit {
+  constructor(ctx, output) {
+    this.ctx = ctx; this.output = output;
+    this.noise = noiseBuffer(ctx, 1);
+  }
+  _env(t, peak, len) {
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    g.connect(this.output);
+    return g;
+  }
+  _tone(t, type, f0, f1, sweep, peak, len) {
+    const o = this.ctx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + sweep);
+    o.connect(this._env(t, peak, len)); o.start(t); o.stop(t + len + 0.02);
+  }
+  _noise(t, type, f, q, peak, len) {
+    const n = this.ctx.createBufferSource(); n.buffer = this.noise;
+    const b = this.ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q;
+    n.connect(b); b.connect(this._env(t, peak, len));
+    n.start(t, Math.random() * 0.5); n.stop(t + len + 0.02);
+  }
+  hit(kind, vel, when, opt = {}) {
+    const t = when ?? this.ctx.currentTime;
+    const tune = Math.pow(2, (opt.tune || 0) / 12), dec = opt.decay || 1;
+    const root = Math.max(45, Math.min(160, (opt.root || 110) / 2)) * tune;
+    switch (kind) {
+      case 'klong': // barrel drum: pitch-dropping body + skin
+        this._tone(t, 'sine', root * 2.6, root, 0.06, 0.95 * vel, 0.38 * dec);
+        this._noise(t, 'bandpass', 2200, 1.1, 0.45 * vel, 0.08 * dec);
+        break;
+      case 'slap': // open-hand slap on the klong head
+        this._tone(t, 'sine', root * 4, root * 1.5, 0.03, 0.5 * vel, 0.14 * dec);
+        this._noise(t, 'bandpass', 3200 * tune, 1.4, 0.7 * vel, 0.1 * dec);
+        break;
+      case 'kick':
+        this._tone(t, 'sine', 150 * tune, 46 * tune, 0.09, 1.0 * vel, 0.45 * dec);
+        this._tone(t, 'triangle', 400 * tune, 120 * tune, 0.01, 0.3 * vel, 0.02);
+        break;
+      case 'snare':
+        this._tone(t, 'triangle', 240 * tune, 180 * tune, 0.04, 0.5 * vel, 0.12 * dec);
+        this._noise(t, 'highpass', 1500, 0.7, 0.6 * vel, 0.2 * dec);
+        break;
+      case 'ching': case 'chap': { // finger cymbals: inharmonic squares, open rings / closed is damped
+        const open = kind === 'ching', len = (open ? 0.35 : 0.06) * dec;
+        const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
+        const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 9000; bp.Q.value = 0.7;
+        hp.connect(bp); bp.connect(this._env(t, 0.18 * vel, len));
+        for (const r of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
+          const o = this.ctx.createOscillator(); o.type = 'square'; o.frequency.value = 410 * r * tune;
+          o.connect(hp); o.start(t); o.stop(t + len + 0.02);
+        }
+        break;
+      }
+    }
+  }
 }
 
 function softClip(k) {

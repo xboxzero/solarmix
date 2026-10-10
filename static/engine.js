@@ -5,11 +5,24 @@
 // (tuning.js), sequences the klong + ching groove, records the output and
 // hands the UI a snapshot of everything to draw.
 
-// Mor lam groove, eighth notes over two bars of 4/4: klong (drum) on the
-// beats with pushes, ching (small cymbals) answering on every off-beat —
-// open "ching" on 2 & 4, closed "chap" elsewhere.
-const KLONG_PATTERN = [1.0, 0, 0.35, 0.6, 0.85, 0, 0.45, 0.3, 1.0, 0, 0.35, 0.6, 0.85, 0.25, 0.5, 0.4];
-const CHING_PATTERN = [0, 0.5, 0, 0.9, 0, 0.5, 0, 0.9, 0, 0.5, 0, 0.9, 0, 0.5, 0.3, 0.9];
+// Drum machine: six tracks × up to 16 sixteenth-note steps.
+// Pattern strings: '.' off · '-' soft · 'o' medium · 'x' accent.
+const DRUM_TRACKS = [
+  { id: 'klong', name: 'KLONG' },
+  { id: 'slap',  name: 'SLAP' },
+  { id: 'kick',  name: 'KICK' },
+  { id: 'snare', name: 'SNARE' },
+  { id: 'ching', name: 'CHING' },
+  { id: 'chap',  name: 'CHAP' },
+];
+const DRUM_PRESETS = {
+  'lam sing': { klong: 'o..-..o.o..-..o.', slap: '......-.......x.', kick: 'x...x...x...x...', snare: '....o.......o...', ching: '..x...x...x...x.', chap: '.-.-.-.-.-.-.-.-' },
+  'lam toei': { klong: 'x..o..x...o..o..', slap: '....-.......o...', kick: 'x.......x.......', snare: '................', ching: '....x.......x...', chap: '..o...o...o...o.' },
+  'lam phloen': { klong: '..o..o..o.o..o..', slap: '.......-.......o', kick: 'x..x..x...x..x..', snare: '....x.......x..-', ching: '..x...x...x...x.', chap: 'o...o...o...o...' },
+  'classic': { klong: 'x...-.o.o...-.-.', slap: '................', kick: '................', snare: '................', ching: '......x.......x.', chap: '..o.......o.....' },
+  'empty': {},
+};
+const VEL = { '.': 0, '-': 0.4, 'o': 0.7, 'x': 1 };
 
 const TAU = Math.PI * 2;
 
@@ -51,6 +64,12 @@ class LocalEngine {
     this.chaos = 0;          // 0 = sends follow the manual matrix exactly
     this.bpm = 126;
     this.fx = Object.assign({}, FX_DEFAULTS);
+    this.drums = {
+      steps: 16, swing: 0, preset: 'lam sing',
+      tracks: DRUM_TRACKS.map(() => ({ level: 0.8, tune: 0, decay: 1, mute: false, pattern: new Float32Array(16) })),
+    };
+    this.loadPreset('lam sing');
+    this._playhead = []; // [audio time, step] pairs for the UI
     this.drumOn = true;
     this.recording = false;
 
@@ -85,6 +104,16 @@ class LocalEngine {
     const octave = Math.floor(Math.min(Math.max(intensity, 0), 1) * 2) - 1; // -1..+1
     const midi = Tuning.degreeMidi(this.mode, step) + 12 * octave;
     return { step: midi, midi, hz: Tuning.hz(midi) };
+  }
+
+  loadPreset(name) {
+    const p = DRUM_PRESETS[name];
+    if (!p) return;
+    this.drums.preset = name;
+    DRUM_TRACKS.forEach((t, i) => {
+      const str = p[t.id] || '';
+      for (let k = 0; k < 16; k++) this.drums.tracks[i].pattern[k] = VEL[str[k]] || 0;
+    });
   }
 
   // Push the whole state into a freshly started synth.
@@ -141,6 +170,16 @@ class LocalEngine {
         this.fx[msg.path] = msg.value;
         s.setFx(msg.path, msg.value);
         break;
+      case 'drum': {
+        const d = this.drums, t = d.tracks[msg.track];
+        if (msg.op === 'cell' && t && msg.step >= 0 && msg.step < 16) t.pattern[msg.step] = clamp(msg.value, 0, 1);
+        else if (msg.op === 'track' && t && msg.key in t && msg.key !== 'pattern') t[msg.key] = msg.value;
+        else if (msg.op === 'steps') d.steps = clamp(msg.value | 0, 1, 16);
+        else if (msg.op === 'swing') d.swing = clamp(msg.value, 0, 0.6);
+        else if (msg.op === 'preset') this.loadPreset(msg.name);
+        else if (msg.op === 'clear') d.tracks.forEach(tr => tr.pattern.fill(0));
+        break;
+      }
       case 'route':
         if (msg.voice < 4 && msg.bus < 4) this.route[msg.voice * 4 + msg.bus] = clamp(msg.value, 0, 1);
         break;
@@ -192,21 +231,32 @@ class LocalEngine {
   _scheduleDrums() {
     const ctx = this.synth.ctx;
     if (!ctx || ctx.state !== 'running') return;
-    const stepDur = 60 / this.bpm / 2; // eighth notes
+    const d = this.drums;
+    const stepDur = 60 / this.bpm / 4; // sixteenth notes
     const now = ctx.currentTime;
     if (this._nextDrumTime < now) this._nextDrumTime = now + 0.05;
     while (this._nextDrumTime < now + 0.12) {
-      const i = this._drumStep % KLONG_PATTERN.length;
+      const i = this._drumStep % d.steps;
+      const t = this._nextDrumTime + (i % 2 ? d.swing * stepDur : 0); // swing delays the off-16ths
       if (this.drumOn) {
-        const kv = KLONG_PATTERN[i], cv = CHING_PATTERN[i];
-        const pitch = this.root * (i % 8 === 0 ? 1 : 1.5);
-        if (kv > 0) this.synth.voices[3].noteOn(pitch, kv * 0.8, this._nextDrumTime);
-        // open ching rings on the strong off-beats, closed chap on the rest
-        if (cv > 0) this.synth.ching(cv, cv > 0.8, this._nextDrumTime);
+        d.tracks.forEach((tr, k) => {
+          const v = tr.pattern[i];
+          if (v > 0 && !tr.mute) this.synth.drum(DRUM_TRACKS[k].id, v * tr.level, t, { tune: tr.tune, decay: tr.decay, root: this.root });
+        });
+        this._playhead.push([t, i]);
       }
-      this._drumStep++;
+      this._drumStep = (this._drumStep + 1) % d.steps;
       this._nextDrumTime += stepDur;
     }
+  }
+
+  // Step currently sounding (for the sequencer's playhead), or -1.
+  drumStepNow() {
+    const ctx = this.synth.ctx;
+    if (!ctx || !this.drumOn) { this._playhead.length = 0; return -1; }
+    const now = ctx.currentTime;
+    while (this._playhead.length > 1 && this._playhead[1][0] <= now) this._playhead.shift();
+    return this._playhead.length && this._playhead[0][0] <= now ? this._playhead[0][1] : -1;
   }
 
   startRecording() {
@@ -250,6 +300,7 @@ class LocalEngine {
       qcoef: q,
       sends: Array.from(this.sends),
       ch_levels: this.chLevels || [0, 0, 0, 0],
+      drum_step: this.drumStepNow(),
       liss_a: 1 + 4 * (q[0] + q[5] + q[10] + q[15]),
       liss_b: 1 + 4 * (q[1] + q[4] + q[11] + q[14]),
       liss_c: 1 + 4 * (q[2] + q[7] + q[8] + q[13]),
@@ -260,3 +311,5 @@ class LocalEngine {
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
 window.LocalEngine = LocalEngine;
+window.DRUM_TRACKS = DRUM_TRACKS;
+window.DRUM_PRESETS = DRUM_PRESETS;
