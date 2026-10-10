@@ -78,16 +78,16 @@ function rigDefaults(kind) {
     'db.type': 'pingpong', 'db.time': 250, 'db.sync': true, 'db.div': '1/4', 'db.fdbk': 0.35, 'db.tone': 4000, 'db.mod': 0.2,
     'dry.mode': 'clean', 'dry.gain': 0.5, 'dry.tone': keys ? 6000 : 12000, 'dry.level': 1,
     'dry.comp': !keys, 'dry.thresh': -18, 'dry.ratio': 4,
-    'ir.type': 'room', 'ir.mix': keys ? 0.3 : 0.2, 'ir.level': 1,
+    'ir.type': keys ? 'room' : 'off', 'ir.mix': keys ? 0.3 : 0.2, 'ir.level': 1,
     'bpm': 126,
   };
   for (const ph of ['phra', 'phda', 'phrb', 'phdb']) {
-    P[ph + '.on'] = keys && (ph === 'phra' || ph === 'phda');
+    P[ph + '.on'] = false; // off by default: each one costs CPU while on
     P[ph + '.rate'] = { phra: 0.3, phda: 0.37, phrb: 0.23, phdb: 0.31 }[ph];
     P[ph + '.depth'] = 0.6; P[ph + '.fdbk'] = 0.4; P[ph + '.mix'] = 0.5;
   }
   // channels: dry · rev A · dly A · rev B · dly B · mod
-  const lv = keys ? [0.9, 0.6, 0.5, 0.3, 0.3, 0.5] : [0.9, 0.4, 0.2, 0.3, 0, 0];
+  const lv = keys ? [0.9, 0.6, 0.5, 0.3, 0.3, 0.5] : [0.9, 0.4, 0.2, 0, 0, 0];
   const pan = [0, -0.7, -0.4, 0.7, 0.4, 0];
   CHANNELS.forEach((_, i) => {
     P[`ch.${i}.level`] = lv[i]; P[`ch.${i}.pan`] = pan[i]; P[`ch.${i}.mute`] = false; P[`ch.${i}.solo`] = false;
@@ -213,6 +213,25 @@ function clipCurve(type, drive) {
 
 
 // ---------------------------------------------------------------------------
+// Rewire: input → (only the stages in use) → output.
+// Nodes that are not wired in are not reachable from the speakers, so the
+// browser does not compute them at all — a neutral EQ band or a bypassed
+// amp costs nothing. Rewiring only happens when the set of stages changes.
+// ---------------------------------------------------------------------------
+class Rewire {
+  constructor(input, output) { this.input = input; this.output = output; this.cur = null; }
+  set(nodes) {
+    const c = this.cur;
+    if (c && c.length === nodes.length && c.every((n, i) => n === nodes[i])) return;
+    this.input.disconnect();
+    if (c) for (const n of c) n.disconnect();
+    const all = [this.input, ...nodes, this.output];
+    for (let i = 0; i < all.length - 1; i++) all[i].connect(all[i + 1]);
+    this.cur = nodes;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase shifter insert: 6 allpass stages swept by an LFO, feedback, dry/wet.
 // `invert` starts the LFO half a cycle later so two phasers sweep opposite.
 // ---------------------------------------------------------------------------
@@ -234,13 +253,21 @@ class Phaser {
     this.fb = ctx.createGain();
     const loop = ctx.createDelay(0.01);
     this.input.connect(this.dry); this.dry.connect(this.output);
-    this.input.connect(this.stages[0]);
     for (let i = 0; i < 5; i++) this.stages[i].connect(this.stages[i + 1]);
-    this.stages[5].connect(this.wet); this.wet.connect(this.output);
-    this.stages[5].connect(this.fb); this.fb.connect(loop); loop.connect(this.stages[0]);
+    this.wet.connect(this.output);
+    this.fb.connect(loop); loop.connect(this.stages[0]);
     this.lfo.start();
+    this.on = false;
+  }
+  // Off = the allpass chain is unplugged, so it is not computed at all.
+  setOn(on) {
+    if (on === this.on) return;
+    this.on = on;
+    if (on) { this.input.connect(this.stages[0]); this.stages[5].connect(this.wet); this.stages[5].connect(this.fb); }
+    else { this.input.disconnect(this.stages[0]); this.stages[5].disconnect(); }
   }
   apply(on, rate, depth, fdbk, mix, ramp) {
+    this.setOn(!!on && mix > 0);
     ramp(this.lfo.frequency, rate, 0.05);
     ramp(this.lfoGain.gain, 150 + 1300 * depth, 0.05);
     ramp(this.fb.gain, on ? fdbk * 0.75 : 0);
@@ -261,18 +288,17 @@ class DryDrive {
     this.input = ctx.createGain();
     this.hp = f('highpass', 20, 0.7);
     this.pre1 = ctx.createGain();
-    this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '4x';
+    this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '2x';
     this.inter = f('lowpass', 20000, 0.7);
     this.pre2 = ctx.createGain();
-    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '4x';
+    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '2x';
     this.scoop = f('peaking', 650, 0.9);
     this.tone = f('lowpass', 6000, 0.7);
     this.makeup = ctx.createGain();
     this.comp = ctx.createDynamicsCompressor();
     this.comp.attack.value = 0.005; this.comp.release.value = 0.15; this.comp.knee.value = 6;
     this.output = ctx.createGain();
-    const chain = [this.input, this.hp, this.pre1, this.sh1, this.inter, this.pre2, this.sh2, this.scoop, this.tone, this.makeup, this.comp, this.output];
-    for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]);
+    this.wire = new Rewire(this.input, this.output);
   }
   apply(P, ramp) {
     const mode = P['dry.mode'], g = P['dry.gain'];
@@ -307,6 +333,13 @@ class DryDrive {
     const on = P['dry.comp'];
     ramp(this.comp.threshold, on ? P['dry.thresh'] : 0);
     ramp(this.comp.ratio, on ? P['dry.ratio'] : 1);
+    const n = [];
+    if (mode === 'high') n.push(this.hp, this.pre1, this.sh1, this.inter, this.pre2, this.sh2, this.scoop);
+    else if (mode === 'low') n.push(this.hp, this.pre1, this.sh1);
+    if (P['dry.tone'] < 11900) n.push(this.tone);
+    if (mode !== 'clean') n.push(this.makeup);
+    if (on) n.push(this.comp);
+    this.wire.set(n);
   }
 }
 
@@ -334,10 +367,10 @@ class SourceChain {
     // amp
     this.aHp = biq(ctx, 'highpass', 10, 0.7);
     this.aPre1 = ctx.createGain();
-    this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '4x';
+    this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '2x';
     this.aInter = biq(ctx, 'lowpass', 20000, 0.7);
     this.aPre2 = ctx.createGain();
-    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '4x';
+    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '2x';
     this.tBass = biq(ctx, 'lowshelf', 100, undefined, 0);
     this.tMid = biq(ctx, 'peaking', 600, 0.8, 0);
     this.tTreble = biq(ctx, 'highshelf', 2500, undefined, 0);
@@ -353,10 +386,33 @@ class SourceChain {
     this.cLp1 = biq(ctx, 'lowpass', 20000, 0.8);
     this.cLp2 = biq(ctx, 'lowpass', 20000, 0.7);
     this.output = ctx.createGain();
-    chain([this.input, this.inGain, this.hpf, this.low, this.lm, this.hm, this.high, this.lpf,
-      this.aHp, this.aPre1, this.sh1, this.aInter, this.aPre2, this.sh2,
-      this.tBass, this.tMid, this.tTreble, this.tPres, this.aPost, this.aMakeup, this.aMaster,
-      this.cHp, this.cLow, this.cNotch, this.cPres, this.cLp1, this.cLp2, this.output]);
+    this.wire = new Rewire(this.input, this.output);
+  }
+  // Wire in only the stages that change the sound.
+  rewire(P) {
+    const n = [];
+    if (P['pre.on']) {
+      if (P['pre.input'] !== 0) n.push(this.inGain);
+      if (P['pre.hpf'] > 21) n.push(this.hpf);
+      if (P['pre.low'] !== 0) n.push(this.low);
+      if (P['pre.lm'] !== 0) n.push(this.lm);
+      if (P['pre.hm'] !== 0) n.push(this.hm);
+      if (P['pre.high'] !== 0) n.push(this.high);
+      if (P['pre.lpf'] < 19900) n.push(this.lpf);
+    }
+    if (P['amp.on']) {
+      const m = AMP_MODELS[P['amp.model']] || AMP_MODELS.clean;
+      n.push(this.aHp, this.aPre1, this.sh1, this.aInter);
+      if (m.c2) n.push(this.aPre2, this.sh2);
+      if (P['amp.bass'] + m.low !== 0) n.push(this.tBass);
+      if (P['amp.mid'] !== 0) n.push(this.tMid);
+      if (P['amp.treble'] + m.bright !== 0) n.push(this.tTreble);
+      if (P['amp.presence'] !== 0) n.push(this.tPres);
+      n.push(this.aPost, this.aMakeup, this.aMaster);
+    }
+    const c = CAB_TYPES[P['cab.type']];
+    if (c && c.lp) n.push(this.cHp, this.cLow, this.cNotch, this.cPres, this.cLp1, this.cLp2);
+    this.wire.set(n);
   }
   applyPre(P, ramp) {
     const on = P['pre.on'];
@@ -367,6 +423,7 @@ class SourceChain {
     ramp(this.lm.frequency, P['pre.lmF']); ramp(this.lm.gain, on ? P['pre.lm'] : 0); ramp(this.lm.Q, P['pre.lmQ']);
     ramp(this.hm.frequency, P['pre.hmF']); ramp(this.hm.gain, on ? P['pre.hm'] : 0); ramp(this.hm.Q, P['pre.hmQ']);
     ramp(this.high.frequency, P['pre.highF']); ramp(this.high.gain, on ? P['pre.high'] : 0);
+    this.rewire(P);
   }
   applyAmp(P, ramp) {
     const on = P['amp.on'], m = AMP_MODELS[P['amp.model']] || AMP_MODELS.clean, d = P['amp.drive'];
@@ -375,6 +432,7 @@ class SourceChain {
       ramp(this.aInter.frequency, 20000); ramp(this.aPre2.gain, 1); this.sh2.curve = null;
       for (const f of [this.tBass, this.tMid, this.tTreble, this.tPres]) ramp(f.gain, 0);
       ramp(this.aPost.frequency, 20000); ramp(this.aMakeup.gain, 1); ramp(this.aMaster.gain, 1);
+      this.rewire(P);
       return;
     }
     const g1 = m.g1[0] + (m.g1[1] - m.g1[0]) * d * d, g2 = m.g2[0] + (m.g2[1] - m.g2[0]) * d;
@@ -390,12 +448,14 @@ class SourceChain {
     // clean-ish models stay linear-ish, so scale the makeup with their gain
     ramp(this.aMakeup.gain, m.c2 || m.g1[1] > 20 ? m.makeup : m.makeup / Math.sqrt(g1));
     ramp(this.aMaster.gain, P['amp.master']);
+    this.rewire(P);
   }
   applyCab(P, ramp) {
     const c = CAB_TYPES[P['cab.type']], mic = P['cab.mic'];
     if (!c || !c.lp) {
       ramp(this.cHp.frequency, 10); for (const f of [this.cLow, this.cNotch, this.cPres]) ramp(f.gain, 0);
       ramp(this.cLp1.frequency, 20000); ramp(this.cLp2.frequency, 20000);
+      this.rewire(P);
       return;
     }
     // mic: −1 = off-axis (dark) … +1 = on-axis, close to the cone (bright)
@@ -405,6 +465,7 @@ class SourceChain {
     ramp(this.cNotch.frequency, c.notch[0]); ramp(this.cNotch.gain, c.notch[1]);
     ramp(this.cPres.frequency, c.pres[0]); ramp(this.cPres.gain, c.pres[1] + mic * 3);
     ramp(this.cLp1.frequency, lp); ramp(this.cLp2.frequency, lp * 1.15);
+    this.rewire(P);
   }
 }
 
@@ -536,8 +597,7 @@ class ModUnit {
     this.delayFb = ctx.createGain();
     this.delayOut = ctx.createGain();
     this.lfo.connect(this.delayLfo); this.delayLfo.connect(this.delay.delayTime);
-    this.input.connect(this.delay); this.delay.connect(this.delayFb); this.delayFb.connect(this.delay);
-    this.delay.connect(this.delayOut);
+    this.input.connect(this.delay); this.delayFb.connect(this.delay);
     this.phaseLfo = ctx.createGain();
     this.lfo.connect(this.phaseLfo);
     this.allpass = [0, 1, 2, 3].map(() => { const a = biq(ctx, 'allpass', 800, 0.6); this.phaseLfo.connect(a.frequency); return a; });
@@ -546,14 +606,23 @@ class ModUnit {
     this.phaseOut = ctx.createGain();
     this.input.connect(this.allpass[0]);
     chain(this.allpass);
-    this.allpass[3].connect(this.phaseOut);
-    this.allpass[3].connect(this.phaseFb); this.phaseFb.connect(loop); loop.connect(this.allpass[0]);
+    this.phaseFb.connect(loop); loop.connect(this.allpass[0]);
     this.output = ctx.createGain();
     this.delayOut.connect(this.output); this.phaseOut.connect(this.output);
+    this.path = null;
+  }
+  // Only the selected path (modulated delay or allpass sweep) is wired in.
+  setPath(phaser) {
+    if (phaser === this.path) return;
+    if (this.path !== null) { this.delay.disconnect(); this.allpass[3].disconnect(); }
+    if (phaser) { this.allpass[3].connect(this.phaseOut); this.allpass[3].connect(this.phaseFb); }
+    else { this.delay.connect(this.delayFb); this.delay.connect(this.delayOut); }
+    this.path = phaser;
   }
   apply(P, ramp) {
     const type = P['mod.type'], depth = P['mod.depth'], fb = P['mod.feedback'];
     const isPhaser = type === 'phaser', isFlanger = type === 'flanger';
+    this.setPath(isPhaser);
     ramp(this.lfo.frequency, P['mod.rate'], 0.05);
     ramp(this.delay.delayTime, isFlanger ? 0.003 : 0.018, 0.05);
     ramp(this.delayLfo.gain, isFlanger ? 0.0025 * depth : 0.008 * depth, 0.05);
@@ -579,12 +648,15 @@ class FxRig {
     this._levelBuf = new Float32Array(512);
     const nCh = CHANNELS.length;
 
-    // channel inputs + send matrix (source s → channel c)
+    // channel inputs + send matrix (source s → channel c). A send is only
+    // plugged in while its level is above zero.
     this.chIn = CHANNELS.map(() => ctx.createGain());
     this.sends = [];
+    this.sendVal = new Float32Array(nSources * nCh);
+    this.sendOn = new Uint8Array(nSources * nCh);
     this.sources.forEach((src, s) => CHANNELS.forEach((_, c) => {
       const g = ctx.createGain(); g.gain.value = 0;
-      src.output.connect(g); g.connect(this.chIn[c]);
+      g.connect(this.chIn[c]);
       this.sends[s * nCh + c] = g;
     }));
 
@@ -601,32 +673,36 @@ class FxRig {
     this.chIn[5].connect(this.mod.input); outs.mod = this.mod.output;
 
     // FX → FX feeds (taken after the channel's processing, before its fader)
+    this.outs = outs;
     this.net = {};
     for (const [a, b] of NET_FEEDS) {
       const g = ctx.createGain(); g.gain.value = 0;
-      outs[a].connect(g); g.connect(this.chIn[CHANNELS.indexOf(b)]);
+      g.connect(this.chIn[CHANNELS.indexOf(b)]);
       this.net[`${a}.${b}`] = g;
     }
 
-    // channel strips: fader → pan → mute → (meter) → mix
+    // channel strips: fader → pan → mute → mix (+ meter while the rack shows it)
     const mix = ctx.createGain();
-    this.strips = CHANNELS.map(id => {
+    this.mix = mix;
+    this.strips = CHANNELS.map(() => {
       const fader = ctx.createGain();
       const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       const mute = ctx.createGain();
       const meter = ctx.createAnalyser(); meter.fftSize = 512;
-      outs[id].connect(fader);
       if (pan) { fader.connect(pan); pan.connect(mute); } else fader.connect(mute);
-      mute.connect(mix); mute.connect(meter);
+      mute.connect(mix);
       return { fader, pan, mute, meter };
     });
+    this.wired = {};
+    this.metering = false;
+    this.irOn = false;
 
     // IR SIM → rig level → destination
     this.irDry = ctx.createGain();
     this.irConv = ctx.createConvolver();
     this.irWet = ctx.createGain();
     this.out = ctx.createGain();
-    mix.connect(this.irDry); mix.connect(this.irConv); this.irConv.connect(this.irWet);
+    mix.connect(this.irDry);
     this.irDry.connect(this.out); this.irWet.connect(this.out);
     this.out.connect(destination);
     this.irFileBuffer = null;
@@ -635,8 +711,54 @@ class FxRig {
   }
 
   setSend(s, c, v) {
-    const g = this.sends[s * CHANNELS.length + c];
-    if (g) g.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    const i = s * CHANNELS.length + c, g = this.sends[i];
+    if (!g) return;
+    const was = this.sendVal[i] > 0;
+    this.sendVal[i] = v;
+    g.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    if (v > 0 && !this.sendOn[i]) { this.sources[s].output.connect(g); this.sendOn[i] = 1; }
+    if (v <= 0 && this.sendOn[i]) {
+      setTimeout(() => { // unplug once faded out
+        if (this.sendVal[i] <= 0 && this.sendOn[i]) { this.sources[s].output.disconnect(g); this.sendOn[i] = 0; }
+      }, 300);
+    }
+    if (was !== v > 0) this._wireChannels();
+  }
+
+  // Plug in only the channels that are both fed and heard (directly or via
+  // an FX → FX feed). Everything else is unplugged and costs no CPU.
+  _wireChannels() {
+    const P = this.p, nCh = CHANNELS.length, at = id => CHANNELS.indexOf(id);
+    const anySolo = CHANNELS.some((_, i) => P[`ch.${i}.solo`]);
+    const audible = id => { const i = at(id); return P[`ch.${i}.level`] > 0 && !P[`ch.${i}.mute`] && (!anySolo || P[`ch.${i}.solo`]); };
+    const feed = (a, b) => P[`net.${a}.${b}`] > 0;
+    const fedBySource = id => { const c = at(id); for (let i = c; i < this.sendVal.length; i += nCh) if (this.sendVal[i] > 0) return true; return false; };
+    const unitOn = id => id !== 'mod' || P['mod.on'];
+    const hasIn = {}, used = {}, active = {};
+    for (const id of ['dry', 'mod', 'da', 'db', 'ra', 'rb']) // signal flows mod → delays → reverbs
+      hasIn[id] = unitOn(id) && (fedBySource(id) || NET_FEEDS.some(([a, b]) => b === id && feed(a, b) && hasIn[a]));
+    for (const id of ['ra', 'rb', 'da', 'db', 'mod', 'dry'])
+      used[id] = audible(id) || NET_FEEDS.some(([a, b]) => a === id && feed(a, b) && used[b] && hasIn[b]);
+    for (const id of CHANNELS) active[id] = hasIn[id] && used[id];
+    for (const id of CHANNELS) {
+      const want = [];
+      if (active[id] && audible(id)) want.push('fader');
+      for (const [a, b] of NET_FEEDS) if (a === id && active[id] && active[b] && feed(a, b)) want.push(b);
+      const key = want.join(',');
+      if (this.wired[id] === key) continue;
+      const out = this.outs[id];
+      out.disconnect();
+      for (const w of want) out.connect(w === 'fader' ? this.strips[at(id)].fader : this.net[`${id}.${w}`]);
+      this.wired[id] = key;
+    }
+    this.active = active;
+  }
+
+  // Level meters only run while the rack is showing this rig.
+  setMetering(on) {
+    if (on === this.metering) return;
+    this.metering = on;
+    for (const s of this.strips) on ? s.mute.connect(s.meter) : s.mute.disconnect(s.meter);
   }
 
   set(path, value) {
@@ -653,7 +775,7 @@ class FxRig {
       case 'pre': for (const s of this.sources) s.applyPre(P, ramp); break;
       case 'amp': for (const s of this.sources) s.applyAmp(P, ramp); break;
       case 'cab': for (const s of this.sources) s.applyCab(P, ramp); break;
-      case 'mod': this.mod.apply(P, ramp); break;
+      case 'mod': this.mod.apply(P, ramp); if (this.wired) this._wireChannels(); break;
       case 'ra': case 'rb': this.rev[group].apply(P, group, ramp, initial); break;
       case 'da': case 'db': this.dly[group].apply(P, group, ramp); break;
       case 'bpm': this.dly.da.apply(P, 'da', ramp); this.dly.db.apply(P, 'db', ramp); break;
@@ -667,13 +789,20 @@ class FxRig {
           if (s.pan) ramp(s.pan.pan, P[`ch.${i}.pan`]);
           ramp(s.mute.gain, !P[`ch.${i}.mute`] && (!anySolo || P[`ch.${i}.solo`]) ? 1 : 0, 0.01);
         });
+        this._wireChannels();
         break;
       }
-      case 'net': for (const k in this.net) ramp(this.net[k].gain, P['net.' + k]); break;
+      case 'net': for (const k in this.net) ramp(this.net[k].gain, P['net.' + k]); this._wireChannels(); break;
       case 'ir': {
         if (a === 'type' || initial) this._loadIR(P['ir.type']);
         const on = P['ir.type'] !== 'off' && (P['ir.type'] !== 'file' || this.irFileBuffer);
         const m = on ? P['ir.mix'] : 0;
+        // the convolver is only plugged in while it is heard
+        if ((m > 0) !== this.irOn) {
+          this.irOn = m > 0;
+          if (this.irOn) { this.mix.connect(this.irConv); this.irConv.connect(this.irWet); }
+          else { this.mix.disconnect(this.irConv); this.irConv.disconnect(); }
+        }
         ramp(this.irDry.gain, Math.cos(m * Math.PI / 2));
         ramp(this.irWet.gain, Math.sin(m * Math.PI / 2));
         break;
@@ -703,16 +832,18 @@ class FxRig {
     const s = this.sources[0], f = new Float32Array(freqs), mag = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
     const out = new Float32Array(freqs.length);
     for (const b of [s.hpf, s.low, s.lm, s.hm, s.high, s.lpf]) {
+      if (!s.wire.cur || !s.wire.cur.includes(b)) continue; // band not in use = flat
       b.getFrequencyResponse(f, mag, ph);
       for (let i = 0; i < out.length; i++) out[i] += 20 * Math.log10(Math.max(1e-6, mag[i]));
     }
     return out;
   }
 
-  // RMS per channel strip, 0..1
+  // RMS per channel strip, 0..1 (zeros while metering is off)
   channelLevels() {
     const b = this._levelBuf;
     return this.strips.map(s => {
+      if (!this.metering) return 0;
       s.meter.getFloatTimeDomainData(b);
       let sum = 0; for (let i = 0; i < b.length; i++) sum += b[i] * b[i];
       return Math.sqrt(sum / b.length);

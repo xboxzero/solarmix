@@ -282,8 +282,15 @@ export function buildRack(root, { engine, synth, send }) {
     for (const k in pages) { pages[k].hidden = k !== name; tabBtns[k].classList.toggle('on', k === name); }
     current = name;
     if (redraws[name]) redraws[name]();
+    meterRigs();
   };
   let current = 'keys';
+  // only the rig on screen runs its level meters
+  const meterRigs = () => {
+    synth.setMetering('keys', !root.hidden && current === 'keys');
+    synth.setMetering('drums', !root.hidden && current === 'drumfx');
+  };
+  new MutationObserver(meterRigs).observe(root, { attributes: true, attributeFilter: ['hidden'] });
   const redraws = {};
   for (const [key, label] of [['keys', 'Keys FX'], ['drumfx', 'Drum FX'], ['drums', 'Drum machine']]) {
     const b = el('button', 'tab', label); b.type = 'button'; b.dataset.page = key;
@@ -564,7 +571,7 @@ export function buildRack(root, { engine, synth, send }) {
     show,
     update(m) {
       if (root.hidden) return;
-      if (!eqDrawn && synth.isInitialized) { eqDrawn = true; redraws.keys(); redraws.drumfx(); }
+      if (!eqDrawn && synth.isInitialized) { eqDrawn = true; redraws.keys(); redraws.drumfx(); meterRigs(); }
       const rig = current === 'drumfx' ? 'drums' : current === 'keys' ? 'keys' : null;
       if (rig && m.ch_levels && m.ch_levels[rig]) m.ch_levels[rig].forEach((l, i) => { const e = meters[rig][i]; if (e) e.style.height = Math.min(100, Math.sqrt(l) * 160) + '%'; });
       if (m.drum_on !== undefined) play.setOn(m.drum_on);
