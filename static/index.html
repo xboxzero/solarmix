@@ -18,6 +18,8 @@
 <svg id="patchbay" aria-hidden="true"></svg>
 <button id="start" type="button"><span class="plate">ENGAGE<small>sound plays from this device · turn up the volume</small></span></button>
 
+<section id="rack" class="rack" hidden></section>
+
 <header class="hud-top panel">
   <div class="title">MORLAM<span class="sub">หมอลำ · khaen machine</span></div>
   <div class="meters">
@@ -41,7 +43,7 @@
     <button data-mode="5">LAI SOI<small>flowing · teasing</small></button>
   </div>
   <div class="readout lcd">
-    <div><span class="lbl">CHAOS</span><span id="chaos-val">25%</span></div>
+    <div><span class="lbl">CHAOS</span><span id="chaos-val">0%</span></div>
     <div><span class="lbl">BPM</span><span id="bpm-val">126</span></div>
     <div><span class="lbl">LISS a:b:c</span><span id="liss-val">1 : 1 : 1</span></div>
     <div><span class="lbl">SCALE</span><span id="scale-val">A C D E G</span></div>
@@ -72,20 +74,20 @@
       </label>
     </div>
     <div class="ctrls">
+      <button id="fx-btn">FX RACK</button>
       <button id="drum-btn" class="on">KLONG + CHING</button>
       <button id="rec-btn" class="rec">REC</button>
     </div>
   </div>
   <div class="keyboard" id="keyboard" aria-label="Pentatonic keyboard"></div>
   <div class="sliders">
-    <label>CHAOS <input id="chaos" type="range" min="0" max="1" step="0.001" value="0.25"></label>
+    <label>CHAOS <input id="chaos" type="range" min="0" max="1" step="0.001" value="0"></label>
     <label>BPM <input id="bpm" type="range" min="40" max="200" step="0.5" value="126"></label>
-    <label>REV <input id="reverb_mix" type="range" min="0" max="1" step="0.001" value="0.25"></label>
-    <label>DELAY <input id="delay_fb" type="range" min="0" max="0.92" step="0.001" value="0.4"></label>
   </div>
 </footer>
 
 <script src="tuning.js"></script>
+<script src="fx.js"></script>
 <script src="synth.js"></script>
 <script src="engine.js"></script>
 <script type="module" src="app.js"></script>

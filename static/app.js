@@ -16,6 +16,7 @@
 // the MorlamSynth (synth.js) plays through Web Audio. No server needed.
 
 import * as THREE from './vendor/three.module.js';
+import { buildRack } from './fxrack.js';
 
 // =====================================================================
 // Web Audio Synth
@@ -28,7 +29,7 @@ async function initAudio() {
   try {
     await synth.init();
     audioReady = true;
-    engine.retune();
+    engine.attach();
     console.log('Audio synth ready');
   } catch (e) {
     console.error('Audio init failed:', e);
@@ -42,7 +43,7 @@ async function resumeAudio() {
     try {
       await synth.init();
       audioReady = true;
-      engine.retune();
+      engine.attach();
     } catch (e) {
       console.error('Audio init retry failed:', e);
       return;
@@ -396,7 +397,7 @@ function buildPatchbay() {
     svg.appendChild(t);
   };
   for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#ffb000');
-  const busLabels = ['DRY', 'REV', 'DLY', 'DARK'];
+  const busLabels = CHANNEL_NAMES;
   for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#c9cfd6');
 }
 window.addEventListener('resize', buildPatchbay);
@@ -433,8 +434,6 @@ function bindSlider(id, label) {
 }
 bindSlider('chaos');
 bindSlider('bpm');
-bindSlider('reverb_mix');
-bindSlider('delay_fb');
 
 const masterEl = $('master');
 const masterVal = $('master-val');
@@ -484,6 +483,27 @@ if (recBtn) {
     recBtn.classList.toggle('on', recording);
     send({ type: 'record', on: recording });
   });
+}
+
+// =====================================================================
+// FX rack
+// =====================================================================
+const rackEl = $('rack');
+const rack = rackEl ? buildRack(rackEl, { engine, synth, send }) : null;
+const fxBtn = $('fx-btn');
+function placeRack() {
+  // the rack fills the space between the top bar and the bottom console
+  const top = document.querySelector('.hud-top'), bot = document.querySelector('.hud-bot');
+  if (!rackEl) return;
+  rackEl.style.top = (top ? top.getBoundingClientRect().bottom + 6 : 70) + 'px';
+  rackEl.style.bottom = (bot ? window.innerHeight - bot.getBoundingClientRect().top + 6 : 220) + 'px';
+}
+if (fxBtn && rackEl) {
+  const sync = () => fxBtn.classList.toggle('on', !rackEl.hidden);
+  fxBtn.addEventListener('click', () => { rackEl.hidden = !rackEl.hidden; placeRack(); sync(); });
+  new MutationObserver(sync).observe(rackEl, { attributes: true, attributeFilter: ['hidden'] });
+  window.addEventListener('resize', placeRack);
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') rackEl.hidden = true; });
 }
 
 // =====================================================================
@@ -710,7 +730,8 @@ function updateHud(m) {
   if (m.liss_a !== undefined) lissA = m.liss_a;
   if (m.liss_b !== undefined) lissB = m.liss_b;
   if (m.liss_c !== undefined) lissC = m.liss_c;
-  if (m.qcoef) updateWires(m.qcoef);
+  if (m.sends) updateWires(m.sends);
+  if (rack) rack.update(m);
 
   // drum + rec buttons follow the engine (REC stops itself if recording fails)
   if (drumBtn && m.drum_on !== undefined) drumBtn.classList.toggle('on', m.drum_on);

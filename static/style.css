@@ -273,3 +273,128 @@ input[type=range]::-moz-range-thumb {
 }
 #start small { display: block; font-family: var(--mono); font-weight: 400; color: var(--steel-hi); font-size: 10px; letter-spacing: 0.15em; text-shadow: none; }
 #start.hidden { display: none; }
+
+/* =====================================================================
+   FX RACK — 19" rack units on rails
+   ===================================================================== */
+.rack {
+  position: fixed; left: 10px; right: 10px; top: 70px; bottom: 230px; z-index: 8;
+  display: flex; flex-direction: column; gap: 10px; padding: 10px 26px; overflow: auto;
+  background:
+    radial-gradient(circle, #050607 0 3px, transparent 3.5px) left 8px top 10px / 12px 24px repeat-y,
+    radial-gradient(circle, #050607 0 3px, transparent 3.5px) right 8px top 10px / 12px 24px repeat-y,
+    linear-gradient(90deg, #4a525b 0 22px, transparent 22px calc(100% - 22px), #4a525b calc(100% - 22px)),
+    #0e1013;
+  border: 1px solid #000; border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.8), inset 0 0 0 1px rgba(255,255,255,0.06);
+  touch-action: pan-y;
+}
+.rack[hidden] { display: none; }
+.rack-bar { display: flex; align-items: center; gap: 12px; }
+.rack-bar .rt { font-family: var(--display); font-weight: 800; letter-spacing: 0.25em; color: var(--amber); text-shadow: 0 0 8px rgba(255,176,0,0.5); }
+.rack-bar .rs { flex: 1; font-size: 10px; color: var(--steel); letter-spacing: 0.1em; }
+.rack-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.rack-row > .unit { flex: 1 1 260px; }
+
+.unit {
+  background:
+    var(--rivet) left 6px top 6px / 8px 8px no-repeat,
+    var(--rivet) right 6px top 6px / 8px 8px no-repeat,
+    var(--rivet) left 6px bottom 6px / 8px 8px no-repeat,
+    var(--rivet) right 6px bottom 6px / 8px 8px no-repeat,
+    var(--brushed),
+    linear-gradient(180deg, var(--plate-a), var(--plate-b));
+  border: 1px solid #0a0c0e; border-radius: 4px; padding: 10px 18px 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -2px 0 rgba(0,0,0,0.5), 0 4px 10px rgba(0,0,0,0.5);
+}
+.unit > header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  border-bottom: 1px solid rgba(0,0,0,0.6); box-shadow: 0 1px 0 rgba(255,255,255,0.07); padding-bottom: 6px; }
+.unit .ut { font-family: var(--display); font-weight: 800; font-size: 12px; letter-spacing: 0.22em; color: var(--steel-hi); }
+.unit .us { flex: 1; font-size: 9px; color: var(--steel); letter-spacing: 0.1em; }
+.ubody { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+
+/* push switches (power, mute, solo, sync…) */
+.sw {
+  position: relative; font: inherit; font-family: var(--display); font-weight: 600; font-size: 9px;
+  letter-spacing: 0.12em; color: var(--text); cursor: pointer; padding: 5px 20px 5px 8px;
+  background: var(--brushed), linear-gradient(180deg, #5b636c 0%, #3a4047 48%, #2b3036 52%, #353b42 100%);
+  border: 1px solid #0b0d0f; border-radius: 3px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 0 #050607;
+}
+.sw::after { content: ""; position: absolute; top: 50%; right: 6px; width: 6px; height: 6px; margin-top: -3px;
+  border-radius: 50%; background: #2a1a05; box-shadow: inset 0 1px 1px rgba(0,0,0,0.8); }
+.sw.on { color: var(--amber); transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.7); }
+.sw.on::after { background: var(--amber); box-shadow: 0 0 6px 2px rgba(255,176,0,0.7); }
+.sw.power.on::after { background: var(--led); box-shadow: 0 0 6px 2px rgba(57,255,106,0.7); }
+.sw.mute.on { color: #fff; } .sw.mute.on::after { background: var(--rust); box-shadow: 0 0 6px 2px rgba(255,90,31,0.8); }
+.sw.solo.on::after { background: var(--hazard); box-shadow: 0 0 6px 2px rgba(245,196,0,0.8); }
+
+/* rotary knob: knurled steel cap with an amber pointer */
+.knob { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 58px; }
+.knob .dial { width: 46px; height: 46px; border-radius: 50%; cursor: ns-resize; touch-action: none;
+  background: radial-gradient(circle, transparent 60%, rgba(0,0,0,0.6) 61%, transparent 72%),
+    conic-gradient(from -135deg, var(--amber-dim) 0 270deg, transparent 270deg);
+  padding: 5px; }
+.knob .cap { width: 100%; height: 100%; border-radius: 50%; position: relative;
+  background:
+    repeating-conic-gradient(from 0deg, #c9cfd6 0 4deg, #6b747d 4deg 8deg);
+  box-shadow: 0 3px 5px rgba(0,0,0,0.7), inset 0 0 0 4px #9aa3ab, inset 0 0 0 5px #2a2f35; }
+.knob .cap::before { content: ""; position: absolute; inset: 7px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #eef2f5, #8a939c 60%, #4a525b); }
+.knob .cap i { position: absolute; left: 50%; top: 3px; width: 3px; height: 13px; margin-left: -1.5px;
+  border-radius: 2px; background: var(--amber); box-shadow: 0 0 5px rgba(255,176,0,0.8); }
+.knob .klbl { font-family: var(--display); font-size: 8px; letter-spacing: 0.12em; color: var(--steel-hi); }
+.knob .kval { font-size: 9px; padding: 1px 4px; min-width: 50px; text-align: center; }
+.knob.small { width: 50px; }
+.knob.small .dial { width: 36px; height: 36px; padding: 4px; }
+.knob.small .cap::before { inset: 5px; }
+.knob.small .cap i { height: 10px; top: 2px; }
+
+/* selects inside units */
+.sel { display: flex; flex-direction: column; gap: 4px; font-family: var(--display); font-size: 8px; letter-spacing: 0.12em; color: var(--steel-hi); }
+.sel select { font: inherit; font-family: var(--mono); font-size: 11px; color: var(--amber);
+  background: linear-gradient(180deg, #1a1104, var(--lcd-bg)); border: 1px solid #000; border-radius: 3px;
+  padding: 4px 6px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.9); text-shadow: 0 0 6px rgba(255,176,0,0.6); }
+
+/* mixer strips */
+.mixer .ubody { flex-wrap: nowrap; gap: 8px; overflow-x: auto; }
+.strip { flex: 1 1 0; min-width: 120px; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 8px 6px; border-radius: 3px; background: rgba(0,0,0,0.25); box-shadow: inset 0 1px 3px rgba(0,0,0,0.6); }
+.strip.ch0 { background: rgba(255,176,0,0.06); }
+.sname { font-family: var(--display); font-weight: 800; font-size: 11px; letter-spacing: 0.18em; color: var(--amber); text-align: center; }
+.sname small { display: block; font-family: var(--mono); font-weight: 400; font-size: 8px; color: var(--steel); letter-spacing: 0.12em; }
+.sparams { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; min-height: 40px; }
+.fzone { display: flex; gap: 8px; align-items: flex-start; }
+.fader { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.fader .track { position: relative; width: 34px; height: 130px; cursor: ns-resize; touch-action: none; }
+.fader .slot { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 6px; margin-left: -3px; border-radius: 3px;
+  background: #050607; box-shadow: inset 0 1px 3px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.12); }
+.fader .ticks { position: absolute; left: 2px; right: 2px; top: 4px; bottom: 4px;
+  background: repeating-linear-gradient(180deg, rgba(255,255,255,0.18) 0 1px, transparent 1px 12px);
+  -webkit-mask: linear-gradient(90deg, #000 0 8px, transparent 8px 26px, #000 26px); mask: linear-gradient(90deg, #000 0 8px, transparent 8px 26px, #000 26px); }
+.fader .fcap { position: absolute; left: 3px; right: 3px; height: 22px; border-radius: 2px;
+  background: repeating-linear-gradient(180deg, #e3e8ed 0 1px, #8a939c 1px 3px);
+  border: 1px solid #111; box-shadow: 0 3px 4px rgba(0,0,0,0.7), inset 0 1px 0 #fff; }
+.fader .fcap::after { content: ""; position: absolute; left: 2px; right: 2px; top: 50%; height: 2px; margin-top: -1px; background: var(--amber); }
+.fader .kval { font-size: 9px; padding: 1px 4px; min-width: 40px; text-align: center; }
+.vu { width: 8px; height: 130px; position: relative; background: #050607; border: 1px solid #000; border-radius: 2px; }
+.vu span { position: absolute; left: 0; right: 0; bottom: 0; height: 0;
+  background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(0,0,0,0.7) 3px 4px),
+    linear-gradient(0deg, var(--led), var(--amber) 70%, var(--rust)); background-attachment: local; }
+.ms { display: flex; gap: 4px; }
+
+/* send matrix */
+.sends .grid { display: grid; grid-template-columns: 52px repeat(4, 1fr); gap: 4px 6px; align-items: center; justify-items: center; }
+.sends .gh { font-family: var(--display); font-size: 8px; letter-spacing: 0.12em; color: var(--amber); }
+.sends .gv { font-family: var(--display); font-size: 8px; letter-spacing: 0.12em; color: var(--steel-hi); justify-self: start; }
+.sends .knob .kval { min-width: 40px; }
+
+/* IR SIM */
+.ircol { display: flex; flex-direction: column; gap: 6px; min-width: 150px; }
+.irfile { font-size: 10px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .rack { left: 4px; right: 4px; padding: 8px 22px; }
+  .rack-bar .rs { display: none; }
+  .strip { min-width: 128px; }
+}
