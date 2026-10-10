@@ -1,6 +1,6 @@
-// morlam globe — a dark 3D Earth strung with the world's submarine
-// fibre-optic cables, ringed by communication satellites, with the countries
-// that run commercial 5G glowing like embers. Each cable is a playable
+// morlam globe — a dark steel 3D Earth strung with the world's submarine
+// fibre-optic cables lit green, ringed by communication satellites, with the
+// countries that run commercial 5G picked out in silver. Each cable is a playable
 // string: touch it and the position along the cable (0 → 1) picks the note.
 //
 // Layers (toggle with setLayer): cables · satellites · 5g
@@ -104,7 +104,7 @@ const SAT_FRAG = `
     gl_FragColor = vec4(vTint * a * 1.4, a);
   }`;
 
-// Embers drifting up around the globe.
+// Green sparks drifting up around the globe.
 const EMBER_VERT = `
   attribute vec3 seed;
   uniform float uTime;
@@ -126,10 +126,10 @@ const EMBER_FRAG = `
   varying float vFade;
   void main() {
     float a = texture2D(uTex, gl_PointCoord).a * vFade;
-    gl_FragColor = vec4(vec3(1.0, 0.45, 0.12) * a, a);
+    gl_FragColor = vec4(vec3(0.25, 1.0, 0.55) * a, a);
   }`;
 
-// Warm rim of light around the globe.
+// Green rim of light around the globe.
 const HALO_VERT = `
   varying vec3 vN; varying vec3 vV;
   void main() {
@@ -141,7 +141,7 @@ const HALO_FRAG = `
   varying vec3 vN; varying vec3 vV;
   void main() {
     float rim = pow(1.0 - abs(dot(vN, vV)), 3.0);
-    gl_FragColor = vec4(vec3(1.0, 0.42, 0.12) * rim * 0.9, rim);
+    gl_FragColor = vec4(vec3(0.22, 1.0, 0.53) * rim * 0.75, rim);
   }`;
 
 export class Globe {
@@ -157,10 +157,10 @@ export class Globe {
     this.warp = 60;            // satellite time speed (× real time)
     this.simMs = Date.now();
 
-    // the sphere: weathered dark stone
+    // the sphere: dark brushed steel
     this.group.add(new THREE.Mesh(
       new THREE.SphereGeometry(R, 96, 64),
-      new THREE.MeshStandardMaterial({ color: 0x1b1712, roughness: 1, metalness: 0.05 }),
+      new THREE.MeshStandardMaterial({ color: 0x2a2f34, roughness: 0.45, metalness: 0.75 }),
     ));
     // atmosphere rim
     this.group.add(new THREE.Mesh(
@@ -177,11 +177,11 @@ export class Globe {
       const l = []; for (let lat = -90; lat <= 90; lat += 3) l.push(latLon(lon, lat, R * 1.001)); grat.push(l);
     }
     this.group.add(new THREE.LineSegments(segmentsGeometry(grat),
-      new THREE.LineBasicMaterial({ color: 0x3a3128, transparent: true, opacity: 0.6 })));
+      new THREE.LineBasicMaterial({ color: 0x4a5258, transparent: true, opacity: 0.5 })));
 
     this.cableGroup = new THREE.Group();
     this.group.add(this.cableGroup);
-    this.cableMat = new THREE.LineBasicMaterial({ color: 0xff6a1a, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.cableMat = new THREE.LineBasicMaterial({ color: 0x39ff88, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false });
     this.highlights = new Map(); // voice → mesh
 
     // embers
@@ -203,9 +203,9 @@ export class Globe {
     const get = f => fetch(base + f).then(r => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.json(); });
     const [land, cables, landing] = await Promise.all([get('land.json'), get('cables.json'), get('landing.json')]);
 
-    // coastlines: tarnished gold
+    // coastlines: polished silver
     this.group.add(new THREE.LineSegments(segmentsGeometry(land.arcs.map(a => polyline(a, R * 1.002))),
-      new THREE.LineBasicMaterial({ color: 0x9c8455 })));
+      new THREE.LineBasicMaterial({ color: 0xc9cfd4 })));
 
     // cables
     const all = [];
@@ -221,7 +221,7 @@ export class Globe {
     const v = new THREE.Vector3();
     landing.points.forEach(([lon, lat], i) => { latLon(lon, lat, R * 1.007, v); lp[i * 3] = v.x; lp[i * 3 + 1] = v.y; lp[i * 3 + 2] = v.z; });
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
-    this.cableGroup.add(new THREE.Points(lg, new THREE.PointsMaterial({ color: 0xffb35c, size: 2.4, sizeAttenuation: false })));
+    this.cableGroup.add(new THREE.Points(lg, new THREE.PointsMaterial({ color: 0xe8fff2, size: 2.4, sizeAttenuation: false })));
 
     this._buildPickTable();
     this.ready = true;
@@ -270,7 +270,7 @@ export class Globe {
     const W = 2048, H = 1024, c = document.createElement('canvas'); c.width = W; c.height = H;
     const g = c.getContext('2d');
     const X = lon => (lon + 180) / 360 * W, Y = lat => (90 - lat) / 180 * H;
-    g.fillStyle = 'rgba(255,90,30,0.55)'; g.strokeStyle = 'rgba(255,170,90,0.9)'; g.lineWidth = 1.5;
+    g.fillStyle = 'rgba(210,225,232,0.32)'; g.strokeStyle = 'rgba(240,248,252,0.85)'; g.lineWidth = 1.5;
     for (const [, polys] of data.countries) {
       for (const rings of polys) {
         g.beginPath();
@@ -287,7 +287,7 @@ export class Globe {
     const hp = new Float32Array(data.cities.length * 3), v = new THREE.Vector3();
     data.cities.forEach(([, lat, lon], i) => { latLon(lon, lat, R * 1.012, v); hp[i * 3] = v.x; hp[i * 3 + 1] = v.y; hp[i * 3 + 2] = v.z; });
     const hg = new THREE.BufferGeometry(); hg.setAttribute('position', new THREE.BufferAttribute(hp, 3));
-    this.hubMat = new THREE.PointsMaterial({ color: 0xff8a3a, size: 0.22, map: this.glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.hubMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.22, map: this.glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     this.fiveg = new THREE.Group();
     this.fiveg.add(shell, new THREE.Points(hg, this.hubMat));
     this.fiveg.visible = this.layers['5g'];
