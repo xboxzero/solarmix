@@ -418,18 +418,21 @@ export function buildRack(root, { engine, synth, send }) {
     // 5 Signal network
     page.append(h2('5', 'Signal network', 'every path set by hand'));
     const netRow = el('div', 'rack-row');
-    const { u: srcU, body: srcB } = card('Sources → channels', rig === 'keys' ? 'CHAOS (bottom bar) blends the qubit router into the first four columns' : 'how much of each drum feeds each channel', null, 'sends');
+    const { u: srcU, body: srcB } = card('Sources → amp / channels', rig === 'keys' ? 'AMP = through the shared pre-amp EQ, amp and cab; the other columns bypass it. CHAOS (bottom bar) blends the qubit router into DRY…DLY B' : 'AMP = through the shared pre-amp EQ, amp and cab; the other columns bypass it', null, 'sends');
     const grid = el('div', 'grid');
-    grid.style.gridTemplateColumns = `64px repeat(${CHANNELS.length}, 1fr)`;
+    grid.style.gridTemplateColumns = `64px repeat(${MATRIX_COLS.length}, 1fr)`;
     grid.append(el('div', 'gh', ''));
-    for (const n of CHANNEL_NAMES) grid.append(el('div', 'gh', n));
+    for (const n of MATRIX_COLS) grid.append(el('div', 'gh' + (n === 'AMP' ? ' amp' : ''), n));
     sources.forEach((sname, si) => {
       grid.append(el('div', 'gv', sname));
-      CHANNELS.forEach((_, c) => {
-        const r = engine.route[rig], i = si * CHANNELS.length + c;
-        grid.append(knob({ min: 0, max: 1, unit: 'pct', def: r[i] }, r[i], v => send({ type: 'route', rig, src: si, ch: c, value: v }), true));
+      MATRIX_COLS.forEach((_, col) => {
+        const r = engine.route[rig], i = si * MATRIX_COLS.length + col;
+        grid.append(knob({ min: 0, max: 1, unit: 'pct', def: r[i] }, r[i], v => send({ type: 'route', rig, src: si, col, value: v }), true));
       });
     });
+    // the amp's own output into each channel
+    grid.append(el('div', 'gv amp', 'AMP OUT'), el('div', 'gx', '—'));
+    CHANNELS.forEach((_, c) => grid.append(ctrl(K(`aout.${c}`, '', 0, 1, 'pct'), true)));
     srcB.append(grid);
     netRow.append(srcU);
     const { u: fxU, body: fxB } = card('FX → FX feeds', 'chain effects in parallel: e.g. delay into reverb', null, 'sends feeds');

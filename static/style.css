@@ -58,6 +58,8 @@ kbd { font-family: var(--mono); font-size: 10px; padding: 0 4px; border: 1px sol
 .master input[type=range] { width: 120px; }
 .master .lcd { width: 48px; text-align: right; }
 .status { font-size: 10px; letter-spacing: 0.08em; }
+.latency { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mute); }
+.latency select { font-size: 11px; color: var(--ink); background: var(--white); border: 1px solid var(--line-2); border-radius: 2px; padding: 3px 4px; }
 .status.warn { color: var(--white); background: var(--warn); border-color: var(--warn); }
 
 /* ---------- side panel: article sidebar ---------- */
@@ -225,6 +227,7 @@ input[type=range]:hover::-moz-range-thumb { background: var(--accent); border-co
 .sends .gh { font-size: 9px; font-weight: 600; letter-spacing: 0.08em; color: var(--mute); }
 .sends .gv { font-size: 10px; font-weight: 600; color: var(--ink-2); justify-self: start; }
 .sends .gx { font-family: var(--mono); color: var(--line-2); }
+.sends .gh.amp, .sends .gv.amp { color: var(--accent); }
 .sends.feeds .gh:first-child { justify-self: start; font-weight: 500; }
 .ircol { display: flex; flex-direction: column; gap: 6px; min-width: 160px; }
 .irfile { font-family: var(--mono); font-size: 10px; color: var(--mute); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -255,6 +258,7 @@ input[type=range]:hover::-moz-range-thumb { background: var(--accent); border-co
   .hud-top { padding: 8px 10px; gap: 10px; flex-wrap: wrap; }
   .title { font-size: 18px; }
   .title .sub { display: none; }
+  .latency { font-size: 0; gap: 0; }
   .hud-side { left: 8px; right: 8px; width: auto; top: 88px; padding: 8px; flex-direction: row; flex-wrap: wrap; max-height: none; }
   .plate-lbl, .readout, .hint { display: none; }
   .modes { flex-direction: row; flex-wrap: wrap; }

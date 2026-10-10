@@ -30,6 +30,13 @@
     <input id="master" type="range" min="0" max="1" step="0.001" value="0.7">
     <div id="master-val" class="lcd">70%</div>
   </div>
+  <label class="latency" title="Audio buffer: bigger = more stable under heavy effects, but more delay">Buffer
+    <select id="latency">
+      <option value="interactive">Low latency</option>
+      <option value="balanced">Balanced</option>
+      <option value="playback">Stable</option>
+    </select>
+  </label>
   <div class="status lcd" id="status">STANDBY</div>
 </header>
 
