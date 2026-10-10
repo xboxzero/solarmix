@@ -104,6 +104,13 @@ source ─► PRE-AMP EQ ─► AMP ─► CAB        one chain per source (4 vo
 | **5 Signal network** | *Sources → channels*: a knob for every source into every channel. *FX → FX feeds*: send a channel's processed signal into another (e.g. a delay into a reverb) |
 | **6 IR simulation & output** | Cabinet/room impulse (built-in or your own WAV/AIFF), dry ⇄ IR mix, IR level, rig output level |
 
+**Performance:** only what you can hear is computed. A neutral EQ band, a
+bypassed amp, a cabinet set to Off, a channel with nothing sent to it or its
+fader down, a phase shifter or IR stage that is off — all of these are
+unplugged from the audio graph and cost no CPU. Phase shifters start off, and
+the drum rig starts with its IR stage off and REV B down; switch them on as
+you need them.
+
 All controls are manual:
 
 - **Knobs:** drag up/down *or* left/right (hold Shift for fine moves), scroll

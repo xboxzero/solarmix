@@ -22,34 +22,45 @@ import { Globe } from './globe.js';
 const synth = new MorlamSynth();
 const engine = new LocalEngine(synth);
 let audioReady = false;
+let audioError = null;
 
-async function initAudio() {
-  try {
-    await synth.init();
-    audioReady = true;
-    engine.attach();
-    console.log('Audio synth ready');
-  } catch (e) {
-    console.error('Audio init failed:', e);
-  }
+// Older iOS mutes Web Audio when the ringer switch is on silent. A looping
+// silent <audio> element moves the page into the "playback" audio session,
+// which ignores the switch. Started once, inside the first tap.
+const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let silentLoop = null;
+function startSilentLoop() {
+  if (!IOS || silentLoop) return;
+  const sr = 8000, n = sr / 2, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 2, true);
+  silentLoop = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
+  silentLoop.loop = true;
+  silentLoop.setAttribute('playsinline', '');
+  silentLoop.play().catch(() => { silentLoop = null; }); // retry on the next tap
 }
 
-// Resume audio on first user interaction (browser autoplay policy).
-// Safari may block AudioContext creation outside a gesture, so retry init here.
+// Audio starts on the first tap/click/key (browser autoplay policy). Both the
+// AudioContext creation and its resume happen synchronously inside that
+// gesture, which Safari requires.
 async function resumeAudio() {
+  startSilentLoop();
   if (!audioReady) {
     try {
       await synth.init();
       audioReady = true;
+      audioError = null;
       engine.attach();
     } catch (e) {
-      console.error('Audio init retry failed:', e);
+      audioError = e;
+      console.error('Audio init failed:', e);
+      showError('Audio could not start: ' + (e && e.message ? e.message : String(e)));
       return;
     }
   }
-  await synth.resume();
-  const gate = document.getElementById('start');
-  if (gate && synth.ctx && synth.ctx.state === 'running') gate.classList.add('hidden');
+  try { await synth.resume(); } catch (e) { console.error('Audio resume failed:', e); }
 }
 
 // ----- error surface (Safari hides JS errors otherwise) -----
@@ -70,11 +81,6 @@ window.addEventListener('error', e => {
     msg = String(e);
   }
   showError(msg);
-});
-
-// Initialize audio on page load
-window.addEventListener('load', () => {
-  initAudio().catch(console.error);
 });
 
 const startBtn = document.getElementById('start');
@@ -634,7 +640,11 @@ function updateHud(m) {
     recBtn.classList.toggle('on', recording);
   }
 
-  if (audioStatus) audioStatus.textContent = synth.ctx && synth.ctx.state === 'running' ? 'AUDIO ON' : 'STANDBY';
+  if (audioStatus) {
+    const st = synth.ctx ? synth.ctx.state : 'none';
+    audioStatus.textContent = audioError ? 'AUDIO ERROR' : st === 'running' ? 'AUDIO ON' : st === 'none' ? 'TAP TO START' : 'TAP FOR SOUND';
+    audioStatus.classList.toggle('warn', !!audioError || (st !== 'running' && st !== 'none'));
+  }
 }
 
 // Engine clock: qubit drift, routing, klong + ching groove, HUD refresh.

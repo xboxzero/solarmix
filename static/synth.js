@@ -20,14 +20,27 @@ class MorlamSynth {
     if (this.isInitialized) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('Web Audio not supported');
-    const ctx = new AC({ latencyHint: 'interactive' });
+    // iOS 17+: play through the ringer/silent switch like a media app
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* not supported */ }
+    let ctx;
+    // 'balanced' gives the audio thread a bigger buffer than 'interactive',
+    // so phones don't drop out under load (a few ms more latency).
+    try { ctx = new AC({ latencyHint: 'balanced' }); } catch (e) { ctx = new AC(); }
     this.ctx = this.audioContext = ctx;
+
+    // Unlock while still inside the user's tap, before the (heavier) graph
+    // build: resume, and start a one-sample silent buffer (old iOS needs it).
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    const blip = ctx.createBufferSource();
+    blip.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    blip.connect(ctx.destination); blip.start(0);
 
     // master → compressor → analyser → speakers (+ recorder tap)
     this.masterGain = ctx.createGain();
     this.masterGain.gain.value = 0.7;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -10; comp.ratio.value = 4;
+    this.comp = comp;
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 1024;
     this._levelBuf = new Float32Array(this.analyser.fftSize);
@@ -35,8 +48,7 @@ class MorlamSynth {
     comp.connect(this.analyser);
     this.analyser.connect(ctx.destination);
     if (ctx.createMediaStreamDestination) {
-      this.recordDest = ctx.createMediaStreamDestination();
-      comp.connect(this.recordDest);
+      this.recordDest = ctx.createMediaStreamDestination(); // plugged in only while recording
     }
 
     this.rigs = {
@@ -75,6 +87,11 @@ class MorlamSynth {
   setFx(rig, path, value) { if (this.rigs) this.rigs[rig].set(path, value); }
   loadIRFile(rig, file) { return this.rigs ? this.rigs[rig].loadIRFile(file) : Promise.reject(new Error('audio not started')); }
   channelLevels(rig) { return this.rigs ? this.rigs[rig].channelLevels() : CHANNELS.map(() => 0); }
+  setMetering(rig, on) { if (this.rigs) this.rigs[rig].setMetering(on); }
+  setRecording(on) {
+    if (!this.recordDest) return;
+    try { on ? this.comp.connect(this.recordDest) : this.comp.disconnect(this.recordDest); } catch (e) { /* already in that state */ }
+  }
   eqResponse(rig, freqs) { return this.rigs ? this.rigs[rig].eqResponse(freqs) : null; }
 
   // RMS of the master output, 0..1
@@ -290,6 +307,24 @@ class DrumKit {
     n.connect(b); b.connect(this._env(t, peak, len));
     n.start(t, Math.random() * 0.5); n.stop(t + len + 0.02);
   }
+  // Cymbal tone (six inharmonic squares through a high band-pass), built
+  // once per tuning and reused, so each hit costs two nodes, not ten.
+  _cymbal(tune) {
+    this._cym = this._cym || {};
+    if (this._cym[tune]) return this._cym[tune];
+    const sr = this.ctx.sampleRate, n = Math.floor(sr * 0.8), d = new Float32Array(n);
+    const k = Math.pow(2, tune / 12);
+    for (const r of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
+      const f = 410 * r * k / sr;
+      for (let i = 0; i < n; i++) d[i] += ((i * f) % 1 < 0.5 ? 1 : -1) / 6;
+    }
+    biquad(d, sr, 'highpass', 6500, 0.707);
+    biquad(d, sr, 'bandpass', 9000, 0.7);
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(d[i]));
+    for (let i = 0; i < n; i++) d[i] *= 0.9 / (peak || 1);
+    const buf = this.ctx.createBuffer(1, n, sr); buf.getChannelData(0).set(d);
+    return (this._cym[tune] = buf);
+  }
   hit(kind, vel, when, opt = {}) {
     const t = when ?? this.ctx.currentTime;
     this.output = this.outs[Math.max(0, DRUM_KINDS.indexOf(kind))];
@@ -312,15 +347,12 @@ class DrumKit {
         this._tone(t, 'triangle', 240 * tune, 180 * tune, 0.04, 0.5 * vel, 0.12 * dec);
         this._noise(t, 'highpass', 1500, 0.7, 0.6 * vel, 0.2 * dec);
         break;
-      case 'ching': case 'chap': { // finger cymbals: inharmonic squares, open rings / closed is damped
+      case 'ching': case 'chap': { // finger cymbals: open rings, closed is damped
         const open = kind === 'ching', len = (open ? 0.35 : 0.06) * dec;
-        const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
-        const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 9000; bp.Q.value = 0.7;
-        hp.connect(bp); bp.connect(this._env(t, 0.18 * vel, len));
-        for (const r of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
-          const o = this.ctx.createOscillator(); o.type = 'square'; o.frequency.value = 410 * r * tune;
-          o.connect(hp); o.start(t); o.stop(t + len + 0.02);
-        }
+        const src = this.ctx.createBufferSource();
+        src.buffer = this._cymbal(opt.tune || 0);
+        src.connect(this._env(t, 0.18 * vel, len));
+        src.start(t); src.stop(t + len + 0.02);
         break;
       }
     }

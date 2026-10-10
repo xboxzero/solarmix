@@ -264,7 +264,9 @@ class LocalEngine {
     const stepDur = 60 / this.bpm / 4; // sixteenth notes
     const now = ctx.currentTime;
     if (this._nextDrumTime < now) this._nextDrumTime = now + 0.05;
-    while (this._nextDrumTime < now + 0.12) {
+    // schedule a quarter second ahead so a busy main thread (3D, UI) can't
+    // starve the groove
+    while (this._nextDrumTime < now + 0.25) {
       const i = this._drumStep % d.steps;
       const t = this._nextDrumTime + (i % 2 ? d.swing * stepDur : 0); // swing delays the off-16ths
       if (this.drumOn) {
@@ -295,6 +297,7 @@ class LocalEngine {
     const rec = new MediaRecorder(dest.stream);
     rec.ondataavailable = e => { if (e.data && e.data.size) this._chunks.push(e.data); };
     rec.onstop = () => {
+      this.synth.setRecording(false);
       const type = rec.mimeType || 'audio/webm';
       const blob = new Blob(this._chunks, { type });
       const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
@@ -304,6 +307,7 @@ class LocalEngine {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     };
+    this.synth.setRecording(true);
     rec.start();
     this._recorder = rec;
     this.recording = true;

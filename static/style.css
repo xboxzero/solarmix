@@ -58,6 +58,7 @@ kbd { font-family: var(--mono); font-size: 10px; padding: 0 4px; border: 1px sol
 .master input[type=range] { width: 120px; }
 .master .lcd { width: 48px; text-align: right; }
 .status { font-size: 10px; letter-spacing: 0.08em; }
+.status.warn { color: var(--white); background: var(--warn); border-color: var(--warn); }
 
 /* ---------- side panel: article sidebar ---------- */
 .hud-side { position: fixed; top: 70px; left: 14px; z-index: 5; padding: 14px 16px; width: 220px;
