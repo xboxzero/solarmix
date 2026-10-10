@@ -1,45 +1,71 @@
-# tezeta · ኢትዮጵያ kiñit synth
+# morlam · หมอลำ khaen machine
 
-> A web-controlled Ethiopian-mode synth that lives on a Raspberry Pi 5.
-> Pure Data is the engine. Safari is the controller. Sound is Pi-only.
-> The UI is a 3D Lissajous curve you touch to play, with a node-graph
-> patchbay whose 16 sends are entangled by a multiplied 4-qubit router.
+> A web-controlled mor lam synth that lives on a Raspberry Pi 5 — or runs
+> entirely in the browser. Pure Data is the Pi engine. Safari is the controller.
+> Play it from a built-in well-tempered pentatonic keyboard or by touching a
+> 3D Lissajous curve, through a node-graph patchbay whose 16 sends are
+> entangled by a multiplied 4-qubit router. The interface is a riveted
+> steel machine panel: brushed plates, hazard stripes, amber LCDs, LED toggles.
 >
 > (https://xboxzero.github.io/solarmix/)
 
 ```
-Safari (touch, no audio)              Raspberry Pi 5
+Safari (touch / keys)                 Raspberry Pi 5
 ┌────────────────────────────┐  ws    ┌─────────────────────────────────────┐
-│ Lissajous 3D curve         │ ◄────► │ Rust (axum + libpd embedded)        │
-│ Node-graph patchbay        │        │   • 16-ch tensor-product qubit      │
-│ Master vol · mode · sliders│        │     router → patchbay sends         │
-└────────────────────────────┘        │   • cpal ALSA → speakers            │
-                                       │ Pure Data: tezeta.pd                │
-                                       │   krar · masinko · washint · kebero│
-                                       │   qenet mode select (1..4)         │
+│ Pentatonic lai keyboard    │ ◄────► │ Rust (axum + libpd embedded)        │
+│ Lissajous 3D curve         │        │   • 16-ch tensor-product qubit      │
+│ Node-graph patchbay        │        │     router → patchbay sends         │
+│ Lai · temperament · key    │        │   • cpal ALSA → speakers            │
+└────────────────────────────┘        │ Pure Data: tezeta.pd                │
+                                       │   khaen · phin · so · klong        │
+                                       │   lai select (1..5)                │
                                        │   FX bus + master volume           │
                                        └─────────────────────────────────────┘
 ```
 
-## Why Ethiopian music
+## Why mor lam
 
-The patch is built around the **qenet** pentatonic system — four kiñit (modes)
-each carrying its own emotional register:
+Mor lam (หมอลำ) is the sung poetry of Laos and Isan, carried by the **khaen**
+— a bamboo free-reed mouth organ with drone pipes. Khaen music is organised
+into **lai**: pentatonic modes in two families (*thang*). Each lai sits on its
+own tonic on a standard khaen in A:
 
-| Mode | Notes (from C) | Character |
-| --- | --- | --- |
-| Tezeta | C · D · E · G · A | nostalgic, longing — Mulatu's Ethio-jazz tonality |
-| Bati | C · E · F · G · B | lively, dance — northern highland feel |
-| Ambassel | C · D♭ · F · G · A♭ | heroic, ancient — Gonder / Wollo song |
-| Anchihoye | C · D♭ · F · G♭ · A | dramatic, liturgical |
+| Lai | Thang | Notes | Character |
+| --- | --- | --- | --- |
+| Lai yai | yao (minor) | A · C · D · E · G | deep, lamenting |
+| Lai noi | yao (minor) | D · F · G · A · C | bright, tender |
+| Lai sutsanaen | san (major) | G · A · C · D · E | stately, the "oldest" lai |
+| Lai po sai | san (major) | C · D · F · G · A | lively, dance |
+| Lai soi | san (major) | D · E · G · A · B | flowing, teasing |
 
-Touch on the Lissajous curve maps to the nearest of the 5 mode-notes. The
-voice you're currently controlling determines the timbre:
+The **KEY** stepper transposes every lai by ±6 semitones.
 
-- **krar** — 6-string lyre, plucked bandpass-filtered saw
-- **masinko** — single-string bowed lute, sustained osc + body filter
-- **washint** — bamboo flute, breathy filtered noise
-- **kebero** — hand drum, envelope-shaped noise + sub thump
+### Well temperament
+
+Pitches are not equal-tempered. Every note is tuned with a 12-note **well
+temperament** (default **Werckmeister III**; also Kirnberger III, Vallotti,
+Young II, or plain 12-TET for comparison) with A4 = 440 Hz. In a well
+temperament each key has its own colour: lai on near keys (C, G, D, F) get
+purer fifths and thirds, remote transpositions sound tenser. Each keyboard key
+shows its deviation from equal temperament in cents. The tuning tables live
+in `static/tuning.js`.
+
+### Voices
+
+- **khaen** — free-reed mouth organ: square + saw reeds, breath tremolo, and
+  two drone pipes holding the lai's tonic and fifth
+- **phin** — amplified plucked lute: bright filtered pluck into overdrive
+- **so** — two-string fiddle: detuned saws, wide vibrato, shell resonance
+- **klong** — barrel drum, plus **ching** finger cymbals answering on the
+  off-beats (open "ching" / damped "chap") in a driving 4/4 lam groove
+
+### Keyboard
+
+The built-in keyboard lays the current lai out over three octaves (two on
+phones), with the lai's tonic keys in brass. Play it with mouse or multi-touch
+(slide across keys for a glissando) or with the computer keyboard:
+`Z X C V B N M , . /` then `Q W E R T Y`. Each voice is monophonic with
+last-note priority: khaen and so glide legato, phin and klong re-strike.
 
 ## Multiplied qubit patchbay
 
@@ -59,9 +85,9 @@ chaos = 1 ─► routing follows the qubit-entangled coefficients
 
 `static/` also works as a plain static site with no Pi: when it's opened from
 `*.github.io`, from `file://`, with `?standalone`, or when no `/ws` server
-answers, `static/engine.js` stands in for the Rust server (qubit router, qenet
-pitch mapping, kebero groove, recording) and `static/synth.js` plays the four
-voices through Web Audio. REC downloads the take as an audio file.
+answers, `static/engine.js` stands in for the Rust server (qubit router, lai
+pitch mapping, klong + ching groove, recording) and `static/synth.js` plays the
+four voices through Web Audio. REC downloads the take as an audio file.
 
 To publish: **Settings → Pages → Source: GitHub Actions**, then push to
 `master` (or run the *Deploy to GitHub Pages* workflow by hand). The workflow
@@ -75,7 +101,7 @@ Try it locally: `cd static && python3 -m http.server` → `http://localhost:8000
 - USB audio device (output)
 - Any device with Safari 16.4+ for control
 
-The browser **never plays sound** — `<canvas>` only. All audio is on the Pi.
+When linked to the Pi, all audio comes from the Pi; standalone, the browser plays it.
 
 ## Build & run
 
@@ -126,13 +152,15 @@ Then: `sudo systemctl enable --now tezeta`.
 
 | Surface | Gesture |
 | --- | --- |
+| Keyboard | Play the active voice in the current lai (touch, mouse, or Z…/ and Q…Y) |
 | 3D Lissajous curve | Touch on the curve to strike the active voice at that point |
-| Voice buttons | Pick which voice (krar/masinko/washint/kebero) responds to touches |
-| Mode buttons | Switch qenet mode (TEZETA / BATI / AMBASSEL / ANCHIHOYE) |
+| Voice buttons | Pick which voice (khaen/phin/so/klong) the keyboard and curve play |
+| Lai buttons | Switch lai (YAI / NOI / SUTSANAEN / PO SAI / SOI) |
+| TEMPERAMENT · KEY | Pick the well temperament and transpose the lai |
 | CHAOS slider | Blend base routing matrix ↔ qubit-entangled routing |
 | MASTER slider (top) | Master output volume |
 | Patchbay (right) | 16 wires showing live qubit-driven send levels |
-| ▶ KEBERO | Toggle the drum voice |
+| KLONG + CHING | Toggle the groove |
 | ● REC | Capture stereo WAV in `recordings/` |
 
 Drag outside the curve to orbit the camera.
@@ -154,7 +182,8 @@ tezeta/
 ├── static/                        # Safari UI: Lissajous + patchbay
 │   ├── index.html
 │   ├── app.js                     # Three.js + SVG patchbay
-│   ├── style.css                  # Ethiopian flag palette
+│   ├── style.css                  # steel machine-panel theme
+│   ├── tuning.js                  # lai + well-temperament tables
 │   └── vendor/three.module.js
 └── puredata/tezeta.pd             # Pd patch — the actual DSP
 ```
@@ -166,12 +195,17 @@ The Rust side drives the patch via `libpd_send_float` to these receivers:
 | Receiver | Meaning |
 | --- | --- |
 | `master_vol` | master output gain (0..1) |
-| `mode` | qenet mode index (1=tezeta, 2=bati, 3=ambassel, 4=anchihoye) |
-| `root` | root frequency Hz |
+| `mode` | lai index (1=yai, 2=noi, 3=sutsanaen, 4=po sai, 5=soi) |
+| `root` | tonic of the current lai, Hz (well-tempered, sent by the browser) |
 | `gate_<v>` | strike a voice (v ∈ 0..3) |
-| `pitch_<v>` | voice pitch Hz |
+| `pitch_<v>` | voice pitch Hz (well-tempered, from `note` messages) |
 | `send_<v>_<b>` | routing coefficient voice v → bus b, 16 total |
 | `rev_mix`, `rev_size`, `del_time`, `del_fb`, `bpm`, `drum_on` | FX + groove |
+
+The browser computes every pitch (lai × well temperament) and sends it as
+`{ type: "note", voice, hz, velocity, gate }`, so the Pi plays the same
+tuning as the web synth. The Pi's native DSP voice slots (`src/audio/dsp.rs`)
+still use their original oscillator topologies for slots 0–3.
 
 The `.pd` patch in this repo is a structural seed — open it in Pure Data to
 tune oscillator topologies and filter responses. The receive names are the

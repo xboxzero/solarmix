@@ -1,11 +1,14 @@
-// tezeta — 3D Lissajous touch UI + SVG patchbay overlay.
+// morlam — 3D Lissajous touch UI, well-tempered pentatonic keyboard and an
+// SVG patchbay overlay.
 //
 // • The Lissajous curve (x = sin(a·t+δ), y = sin(b·t), z = sin(c·t+φ)) lives in
 //   Three.js as a TubeGeometry. Three 'a', 'b', 'c' ratios are entangled with
 //   the qubit router on the server — the geometry breathes with them.
 // • Touch on the curve to play. The hit point is projected onto the closest
-//   parametric t, mapped to a 5-note window of the current qenet mode, and
-//   handled as { type:'lissajous', voice, t, intensity }.
+//   parametric t, mapped to a 5-note window of the current lai, and played
+//   as { type:'note', voice, midi, hz, velocity }.
+// • The keyboard lays the current lai out over three octaves; every pitch is
+//   tuned to the selected well temperament (tuning.js).
 // • The SVG patchbay overlay shows the 16 qubit-driven send levels as wires
 //   between voice nodes (left) and bus nodes (right). Drag a wire to bias the
 //   base routing matrix.
@@ -21,7 +24,7 @@ import * as THREE from './vendor/three.module.js';
 // =====================================================================
 // Web Audio Synth
 // =====================================================================
-const synth = new TezetaSynth();
+const synth = new MorlamSynth();
 const engine = new LocalEngine(synth);
 let audioReady = false;
 
@@ -29,6 +32,7 @@ async function initAudio() {
   try {
     await synth.init();
     audioReady = true;
+    engine.retune();
     console.log('Audio synth ready');
   } catch (e) {
     console.error('Audio init failed:', e);
@@ -42,6 +46,7 @@ async function resumeAudio() {
     try {
       await synth.init();
       audioReady = true;
+      engine.retune();
     } catch (e) {
       console.error('Audio init retry failed:', e);
       return;
@@ -174,17 +179,18 @@ try {
 if (!renderer) throw new Error('WebGL renderer initialization failed');
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x03060a, 1);
+renderer.setClearColor(0x0b0d10, 1);
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x03060a, 9, 30);
+scene.fog = new THREE.Fog(0x0b0d10, 9, 30);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 9);
 camera.lookAt(0, 0, 0);
 
 // lights
-scene.add(new THREE.AmbientLight(0x224060, 0.55));
-const key = new THREE.DirectionalLight(0xfcdd09, 1.2); key.position.set(5, 6, 5); scene.add(key);
-const rim = new THREE.PointLight(0x157a3c, 1.0, 30); rim.position.set(-5, -3, -2); scene.add(rim);
+scene.add(new THREE.HemisphereLight(0xdfe6ee, 0x1a1c20, 0.9));
+const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(5, 6, 5); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffb000, 0.8); fill.position.set(-6, 2, 3); scene.add(fill);
+const rim = new THREE.PointLight(0xff5a1f, 1.2, 30); rim.position.set(-5, -3, -2); scene.add(rim);
 
 // =====================================================================
 // Lissajous 3D curve
@@ -210,15 +216,16 @@ let lissA = 3, lissB = 2, lissC = 5;
 let curve = new LissajousCurve(lissA, lissB, lissC, Math.PI / 2, 0);
 let curveSegments = 320;
 
+// polished steel cable that glows amber-hot with the output level
 const tubeMat = new THREE.MeshStandardMaterial({
-  color: 0xfcdd09, emissive: 0xda121a, emissiveIntensity: 0.35,
-  metalness: 0.45, roughness: 0.3,
+  color: 0xb8c0c8, emissive: 0xff7a00, emissiveIntensity: 0.25,
+  metalness: 0.9, roughness: 0.28, flatShading: false,
 });
 let tubeMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, curveSegments, 0.06, 12, false), tubeMat);
 scene.add(tubeMesh);
 
 // ghost outline (extra glow)
-const ghostMat = new THREE.MeshBasicMaterial({ color: 0x157a3c, transparent: true, opacity: 0.18, side: THREE.BackSide });
+const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffb000, transparent: true, opacity: 0.08, side: THREE.BackSide });
 let ghostMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, curveSegments, 0.18, 12, false), ghostMat);
 scene.add(ghostMesh);
 
@@ -230,12 +237,36 @@ function rebuildCurve() {
   ghostMesh.geometry = new THREE.TubeGeometry(curve, curveSegments, 0.18, 12, false);
 }
 
-// Touch handles — one per voice (krar, masinko, washint, kebero)
-const voiceColors = [0xfcdd09, 0xffffff, 0x157a3c, 0xda121a];
-const voiceLabels = ['krar', 'masinko', 'washint', 'kebero'];
+// Machined cogs turning slowly behind the curve.
+function makeGear(teeth, rOuter, rInner, rHole, depth) {
+  const shape = new THREE.Shape();
+  const n = teeth * 4;
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const r = (i % 4 === 0 || i % 4 === 1) ? rOuter : rInner;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+  }
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rHole, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  return new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 1, curveSegments: 24 });
+}
+const gearMat = new THREE.MeshStandardMaterial({ color: 0x4a525b, metalness: 0.85, roughness: 0.45 });
+const gears = [
+  { mesh: new THREE.Mesh(makeGear(28, 4.6, 4.25, 3.7, 0.18), gearMat), spin: 0.05 },
+  { mesh: new THREE.Mesh(makeGear(14, 2.2, 1.9, 0.9, 0.22), gearMat), spin: -0.1 },
+];
+gears[0].mesh.position.set(0, 0, -4.5);
+gears[1].mesh.position.set(5.1, -3.6, -4.6);
+for (const g of gears) scene.add(g.mesh);
+
+// Touch handles — one per voice (khaen, phin, so, klong)
+const voiceColors = [0xffb000, 0xe3e8ed, 0x39ff6a, 0xff5a1f];
+const voiceLabels = ['khaen', 'phin', 'so', 'klong'];
 const handles = voiceColors.map((c, i) => {
   const g = new THREE.SphereGeometry(0.18, 18, 18);
-  const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.7, metalness: 0.2, roughness: 0.2 });
+  const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.7, metalness: 0.6, roughness: 0.25 });
   const mesh = new THREE.Mesh(g, m);
   mesh.userData = { voice: i, t: i * 0.25, intensity: 0.0 };
   scene.add(mesh);
@@ -315,8 +346,10 @@ function strikeAt(pointerId, clientX, clientY, intensity) {
   handles[voice].userData.intensity = intensity;
   positionHandle(handles[voice]);
 
-  // Pitch mapping (qenet mode × root) lives in LocalEngine / the Pi server.
-  send({ type: 'lissajous', voice, t, intensity });
+  // Lai × temperament pitch mapping lives in LocalEngine + tuning.js; the
+  // Pi just receives the resulting pitch.
+  const { midi, hz } = engine.pitchFor(t, intensity);
+  send({ type: 'note', voice, midi, hz, velocity: intensity });
 }
 
 function release(pointerId) {
@@ -372,7 +405,14 @@ function buildPatchbay() {
   svg.setAttribute('width', w); svg.setAttribute('height', h);
   // place voice nodes on right edge, bus nodes on left of the right rail
   const xR = w - 110, xL = w - 230;
-  const ys = [h * 0.30, h * 0.45, h * 0.60, h * 0.75];
+  // fit between the top bar (or the stacked lai panel on phones) and the console
+  const rectOf = sel => { const el = document.querySelector(sel); return el ? el.getBoundingClientRect() : null; };
+  const narrow = w <= 760;
+  const above = rectOf(narrow ? '.hud-side' : '.hud-top');
+  const below = rectOf('.hud-bot');
+  const top = (above ? above.bottom : 80) + 30;
+  const bot = Math.max(top + 90, (below ? below.top : h - 260) - 46);
+  const ys = [0, 1, 2, 3].map(i => top + (bot - top) * i / 3);
   voicePts.length = 0; busPts.length = 0; wireEls.length = 0;
 
   for (let i = 0; i < 4; i++) {
@@ -384,7 +424,7 @@ function buildPatchbay() {
     for (let b = 0; b < 4; b++) {
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', '#fcdd09');
+      path.setAttribute('stroke', '#ffb000');
       path.setAttribute('stroke-width', '1');
       path.setAttribute('opacity', '0.2');
       svg.appendChild(path);
@@ -394,21 +434,29 @@ function buildPatchbay() {
   const drawNode = (p, label, color) => {
     const c = document.createElementNS(SVG_NS, 'circle');
     c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 12);
-    c.setAttribute('fill', '#03060a'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '2');
+    c.setAttribute('fill', '#2b3036'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '2');
     svg.appendChild(c);
+    // hex socket in the middle of each jack
+    const hex = document.createElementNS(SVG_NS, 'polygon');
+    hex.setAttribute('points', [0, 1, 2, 3, 4, 5].map(k => {
+      const a = Math.PI / 6 + k * Math.PI / 3;
+      return `${p.x + Math.cos(a) * 5},${p.y + Math.sin(a) * 5}`;
+    }).join(' '));
+    hex.setAttribute('fill', '#0b0d10');
+    svg.appendChild(hex);
     const t = document.createElementNS(SVG_NS, 'text');
     t.setAttribute('x', p.x); t.setAttribute('y', p.y + 28);
     t.setAttribute('fill', color);
-    t.setAttribute('font-family', 'ui-monospace, monospace');
+    t.setAttribute('font-family', '"Share Tech Mono", ui-monospace, monospace');
     t.setAttribute('font-size', '9');
     t.setAttribute('text-anchor', 'middle');
     t.setAttribute('letter-spacing', '1.5');
     t.textContent = label;
     svg.appendChild(t);
   };
-  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#fcdd09');
+  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#ffb000');
   const busLabels = ['DRY', 'REV', 'DLY', 'DARK'];
-  for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#157a3c');
+  for (let i = 0; i < 4; i++) drawNode(busPts[i], busLabels[i], '#c9cfd6');
 }
 window.addEventListener('resize', buildPatchbay);
 buildPatchbay();
@@ -444,7 +492,6 @@ function bindSlider(id, label) {
 }
 bindSlider('chaos');
 bindSlider('bpm');
-bindSlider('root');
 bindSlider('reverb_mix');
 bindSlider('delay_fb');
 
@@ -467,7 +514,10 @@ if (modeButtons && modeButtons.length > 0) {
       document.querySelectorAll('#modes button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
       const mode = parseInt(b.dataset.mode, 10);
-      if (!isNaN(mode)) send({ type: 'mode', value: mode });
+      if (!isNaN(mode)) {
+        send({ type: 'mode', value: mode });
+        afterRetune();
+      }
     });
   });
 }
@@ -494,6 +544,136 @@ if (recBtn) {
     send({ type: 'record', on: recording });
   });
 }
+
+// =====================================================================
+// Tuning: temperament + key
+// =====================================================================
+const keyVal = $('key-val');
+function afterRetune() {
+  // Keep the Pi's root (drone + drum pitch) in step with the browser tuning.
+  send({ type: 'set', id: 'root', value: engine.root });
+  if (keyVal) keyVal.textContent = (Tuning.transpose > 0 ? '+' : Tuning.transpose < 0 ? '−' : '±') + Math.abs(Tuning.transpose);
+  const scaleVal = $('scale-val');
+  if (scaleVal) {
+    const lai = Tuning.lai(engine.mode);
+    scaleVal.textContent = lai.steps.map((_, i) => Tuning.name(Tuning.degreeMidi(engine.mode, i)).replace(/-?\d+$/, '')).join(' ');
+  }
+  buildKeyboard();
+}
+const temperamentEl = $('temperament');
+if (temperamentEl) temperamentEl.addEventListener('change', () => {
+  send({ type: 'tuning', temperament: temperamentEl.value });
+  afterRetune();
+});
+const shiftKey = d => {
+  send({ type: 'tuning', transpose: Math.max(-6, Math.min(6, Tuning.transpose + d)) });
+  afterRetune();
+};
+if ($('key-down')) $('key-down').addEventListener('click', () => shiftKey(-1));
+if ($('key-up')) $('key-up').addEventListener('click', () => shiftKey(+1));
+
+// =====================================================================
+// Pentatonic keyboard — three octaves of the current lai plus the top tonic.
+// Each voice is monophonic, so held keys form a last-note-priority stack.
+// =====================================================================
+const kbEl = $('keyboard');
+let KB_KEYS = 16;
+const KB_COMPUTER = 'zxcvbnm,./qwerty'; // one computer key per on-screen key
+const keyEls = [];
+const held = new Map(); // source id (pointer / keyboard code) -> key index
+let heldOrder = [];     // key indices, most recent last
+
+function keyMidi(i) { return Tuning.degreeMidi(engine.mode, i); }
+
+function buildKeyboard() {
+  if (!kbEl) return;
+  kbEl.textContent = '';
+  keyEls.length = 0;
+  KB_KEYS = window.innerWidth <= 600 ? 11 : 16; // two octaves on phones
+  for (const [src, i] of [...held]) if (i >= KB_KEYS) keyRelease(src);
+  const n = Tuning.lai(engine.mode).steps.length;
+  for (let i = 0; i < KB_KEYS; i++) {
+    const midi = keyMidi(i);
+    const el = document.createElement('div');
+    el.className = 'key' + (i % n === 0 ? ' tonic' : '') + (heldOrder.includes(i) ? ' down' : '');
+    el.dataset.idx = i;
+    const c = Tuning.centsOf(midi);
+    el.innerHTML = `<span class="kb">${KB_COMPUTER[i] || ''}</span><span class="nm">${Tuning.name(midi)}</span>` +
+      `<span class="ct">${c >= 0 ? '+' : '−'}${Math.abs(c).toFixed(1)}¢</span>`;
+    el.title = `${Tuning.name(midi)} · ${Tuning.hz(midi).toFixed(2)} Hz`;
+    kbEl.appendChild(el);
+    keyEls.push(el);
+  }
+}
+
+function playTop(voice) {
+  const i = heldOrder[heldOrder.length - 1];
+  const midi = keyMidi(i);
+  send({ type: 'note', voice, midi, hz: Tuning.hz(midi), velocity: 0.85 });
+}
+
+function keyPress(src, i) {
+  if (held.get(src) === i) return;
+  if (held.has(src)) keyRelease(src, true);
+  held.set(src, i);
+  heldOrder = heldOrder.filter(k => k !== i).concat(i);
+  if (keyEls[i]) keyEls[i].classList.add('down');
+  playTop(activeVoiceIndex());
+}
+
+function keyRelease(src, gliding = false) {
+  if (!held.has(src)) return;
+  const i = held.get(src);
+  held.delete(src);
+  if ([...held.values()].includes(i)) return; // still held by another finger
+  heldOrder = heldOrder.filter(k => k !== i);
+  if (keyEls[i]) keyEls[i].classList.remove('down');
+  if (gliding) return; // keyPress follows immediately
+  const voice = activeVoiceIndex();
+  if (heldOrder.length) playTop(voice);
+  else send({ type: 'note', voice, midi: keyMidi(i), gate: false });
+}
+
+function keyAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const k = el && el.closest ? el.closest('.key') : null;
+  return k && kbEl.contains(k) ? parseInt(k.dataset.idx, 10) : -1;
+}
+
+if (kbEl) {
+  kbEl.addEventListener('pointerdown', e => {
+    const i = keyAt(e.clientX, e.clientY);
+    if (i < 0) return;
+    kbEl.setPointerCapture(e.pointerId);
+    keyPress('p' + e.pointerId, i);
+    e.preventDefault();
+  });
+  // slide across keys for a glissando
+  kbEl.addEventListener('pointermove', e => {
+    const src = 'p' + e.pointerId;
+    if (!held.has(src)) return;
+    const i = keyAt(e.clientX, e.clientY);
+    if (i >= 0) keyPress(src, i);
+  });
+  for (const ev of ['pointerup', 'pointercancel']) {
+    kbEl.addEventListener(ev, e => keyRelease('p' + e.pointerId));
+  }
+}
+
+window.addEventListener('keydown', e => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT')) return;
+  const i = KB_COMPUTER.indexOf(e.key.toLowerCase());
+  if (i < 0 || i >= KB_KEYS) return;
+  keyPress('k' + e.code, i);
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => keyRelease('k' + e.code));
+window.addEventListener('blur', () => { for (const src of [...held.keys()]) keyRelease(src); });
+
+window.addEventListener('resize', buildKeyboard);
+afterRetune();
+buildPatchbay();
 
 // =====================================================================
 // Animate
@@ -528,6 +708,8 @@ function animate() {
     camera.position.y = Math.sin(camPitch) * r;
     camera.lookAt(0, 0, 0);
 
+    for (const g of gears) g.mesh.rotation.z += g.spin * dt * (1 + outLevelSmoothed * 6);
+
     // handles ride the curve
     if (handles && handles.length > 0) {
       handles.forEach(h => {
@@ -539,7 +721,7 @@ function animate() {
     }
     // tube emissive responds to overall output level (set in onTick)
     if (tubeMat && typeof outLevelSmoothed === 'number') {
-      tubeMat.emissiveIntensity = 0.25 + Math.max(0, Math.min(1.2, outLevelSmoothed * 1.2));
+      tubeMat.emissiveIntensity = 0.15 + Math.max(0, Math.min(1.2, outLevelSmoothed * 1.5));
     }
 
     renderer.render(scene, camera);
@@ -610,6 +792,10 @@ function onTick(m) {
     }
   }
   if (m.mode !== undefined) {
+    if (m.mode !== engine.mode && m.mode >= 1 && m.mode <= LAI_COUNT) {
+      engine.handle({ type: 'mode', value: m.mode });
+      afterRetune();
+    }
     document.querySelectorAll('#modes button').forEach(b => {
       const btnMode = parseInt(b.dataset.mode, 10);
       b.classList.toggle('on', !isNaN(btnMode) && btnMode === m.mode);
@@ -629,7 +815,7 @@ setInterval(() => {
 
 if (STANDALONE || !everLinked) {
   const hint = document.querySelector('.hud-side .hint');
-  if (hint) hint.innerHTML = 'Touch on the curve to play.<br>Voices: <b>krar · masinko · washint · kebero</b>.<br>Drag off the curve to orbit.';
+  if (hint) hint.innerHTML = 'Play the keyboard (mouse, touch or <b>Z…/</b> &amp; <b>Q…Y</b>) or touch the curve.<br>Voices: <b>khaen · phin · so · klong</b>.<br>Drag off the curve to orbit.';
 }
 
 connect();

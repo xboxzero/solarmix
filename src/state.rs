@@ -14,17 +14,17 @@ impl AtomicF32 {
     #[inline(always)] pub fn set(&self, v: f32) { self.0.store(v.to_bits(), REL); }
 }
 
-pub const MODE_TEZETA: u8 = 1;
+pub const MODE_LAI_YAI: u8 = 1;
 
 pub struct SharedState {
     // ---- master ----
     pub master_vol: AtomicF32,
 
     // ---- mode + root ----
-    pub mode: AtomicU8,            // 1..4 (qenet)
+    pub mode: AtomicU8,            // 1..5 (mor lam lai)
     pub root_hz: AtomicF32,        // base pitch e.g. 220.0
 
-    // ---- voices (4: 0=krar, 1=masinko, 2=washint, 3=kebero) ----
+    // ---- voices (4: 0=khaen, 1=phin, 2=so, 3=klong) ----
     pub voice_gate: [AtomicF32; 4],     // 0/1 trigger
     pub voice_pitch: [AtomicF32; 4],    // Hz target
 
@@ -63,18 +63,18 @@ pub struct SharedState {
 impl SharedState {
     pub fn new() -> Arc<Self> {
         // Default routing: each voice → its "own" bus with a little overlap.
-        // (v0=krar -> dry, v1=masinko -> reverb, v2=washint -> delay, v3=kebero -> dry)
+        // (v0=khaen -> dry, v1=phin -> reverb, v2=so -> delay, v3=klong -> dry)
         let mut r = [0.0_f32; 16];
         r[0 * 4 + 0] = 0.9; r[0 * 4 + 1] = 0.2;
         r[1 * 4 + 1] = 0.8; r[1 * 4 + 0] = 0.3;
-        r[2 * 4 + 2] = 0.7; r[2 * 4 + 1] = 0.3;
+        r[2 * 4 + 2] = 0.7; r[2 * 4 + 1] = 0.3; r[2 * 4 + 0] = 0.5;
         r[3 * 4 + 0] = 0.9; r[3 * 4 + 3] = 0.2;
 
         let route = std::array::from_fn(|i| AtomicF32::new(r[i]));
         Arc::new(Self {
             master_vol: AtomicF32::new(0.7),
-            mode: AtomicU8::new(MODE_TEZETA),
-            root_hz: AtomicF32::new(220.0),
+            mode: AtomicU8::new(MODE_LAI_YAI),
+            root_hz: AtomicF32::new(220.0),   // A3: lai yai tonic
 
             voice_gate: std::array::from_fn(|_| AtomicF32::new(0.0)),
             voice_pitch: std::array::from_fn(|_| AtomicF32::new(220.0)),
@@ -90,7 +90,7 @@ impl SharedState {
             delay_fb: AtomicF32::new(0.4),
 
             drum_enabled: AtomicBool::new(true),
-            drum_bpm: AtomicF32::new(88.0),
+            drum_bpm: AtomicF32::new(126.0),
 
             input_level: AtomicF32::new(0.0),
             output_level: AtomicF32::new(0.0),

@@ -63,7 +63,15 @@ enum InMsg {
     #[serde(rename = "route")] Route { voice: u8, bus: u8, value: f32 },
     /// Strike / release a voice.
     #[serde(rename = "voice")] Voice { voice: u8, gate: bool },
-    /// Set the qenet mode (1..4).
+    /// Play a voice at an absolute pitch (keyboard + curve). The browser
+    /// computes `hz` from the lai and the selected well temperament.
+    #[serde(rename = "note")] Note {
+        voice: u8,
+        hz: Option<f32>,
+        #[serde(default = "default_velocity")] velocity: f32,
+        #[serde(default = "default_gate")] gate: bool,
+    },
+    /// Set the lai (1..5).
     #[serde(rename = "mode")]  Mode  { value: u8 },
     /// Begin / end WAV recording on the Pi.
     #[serde(rename = "record")] Record { on: bool },
@@ -158,7 +166,9 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
         InMsg::Lissajous { voice, t, intensity } => {
             if (voice as usize) >= 4 { return; }
             // Map parametric `t` (0..1) onto a 5-note window of the current
-            // mode: pick step = floor(t * 5). Frequency = root * 2^(semis/12).
+            // lai: pick step = floor(t * 5). Frequency = root * 2^(semis/12).
+            // (The web UI now sends well-tempered `note` messages instead;
+            // this equal-tempered path is kept for older clients.)
             let mode = s.mode.load(Ordering::Relaxed);
             let scale: &[i32] = mode_scale(mode);
             let step = (t.clamp(0.0, 0.999) * scale.len() as f32) as usize;
@@ -179,8 +189,16 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
                 s.voice_gate[voice as usize].set(if gate { 1.0 } else { 0.0 });
             }
         }
+        InMsg::Note { voice, hz, velocity, gate } => {
+            if (voice as usize) >= 4 { return; }
+            if let Some(hz) = hz.filter(|h| h.is_finite()) {
+                s.voice_pitch[voice as usize].set(hz.clamp(20.0, 8000.0));
+            }
+            let g = if gate { velocity.clamp(0.0, 1.0) } else { 0.0 };
+            s.voice_gate[voice as usize].set(g);
+        }
         InMsg::Mode { value } => {
-            s.mode.store(value.clamp(1, 4), Ordering::Relaxed);
+            s.mode.store(value.clamp(1, LAI_COUNT), Ordering::Relaxed);
         }
         InMsg::Record { on } => {
             if on { eng.start_recording(); } else { eng.stop_recording(); }
@@ -195,12 +213,18 @@ fn handle_msg(s: &Arc<SharedState>, eng: &EngineHandle, msg: InMsg) {
     }
 }
 
+fn default_velocity() -> f32 { 0.8 }
+fn default_gate() -> bool { true }
+
+const LAI_COUNT: u8 = 5;
+
 fn mode_scale(mode: u8) -> &'static [i32] {
-    // semitone offsets from the root for each qenet mode.
+    // semitone offsets from the lai's tonic (= root) for each mor lam lai.
     match mode {
-        2 => &[0, 4, 5, 7, 11], // Bati major:    C E F G B
-        3 => &[0, 1, 5, 7, 8],  // Ambassel:      C Db F G Ab
-        4 => &[0, 1, 5, 6, 9],  // Anchihoye:     C Db F Gb A
-        _ => &[0, 2, 4, 7, 9],  // Tezeta major:  C D E G A
+        2 => &[0, 3, 5, 7, 10], // Lai noi       (thang yao): D F G A C
+        3 => &[0, 2, 5, 7, 9],  // Lai sutsanaen (thang san): G A C D E
+        4 => &[0, 2, 5, 7, 9],  // Lai po sai    (thang san): C D F G A
+        5 => &[0, 2, 5, 7, 9],  // Lai soi       (thang san): D E G A B
+        _ => &[0, 3, 5, 7, 10], // Lai yai       (thang yao): A C D E G
     }
 }

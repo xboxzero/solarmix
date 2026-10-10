@@ -5,18 +5,21 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>tezeta</title>
-<meta name="description" content="tezeta — Ethiopian-mode Lissajous touch synth with a qubit-entangled patchbay.">
+<title>morlam machine</title>
+<meta name="description" content="morlam — a mor lam (หมอลำ) khaen synth: well-tempered pentatonic lai keyboard, 3D Lissajous touch surface and a qubit-entangled patchbay.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Share+Tech+Mono&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <canvas id="stage"></canvas>
 <svg id="patchbay" aria-hidden="true"></svg>
-<button id="start" type="button">TAP TO START<small>sound plays from this device · turn up the volume</small></button>
+<button id="start" type="button"><span class="plate">ENGAGE<small>sound plays from this device · turn up the volume</small></span></button>
 
-<header class="hud-top">
-  <div class="title">tezeta <span class="sub">ኢትዮጵያ kiñit synth</span></div>
+<header class="hud-top panel">
+  <div class="title">MORLAM<span class="sub">หมอลำ · khaen machine</span></div>
   <div class="meters">
     <div class="meter"><span id="in-bar"></span></div>
     <div class="meter"><span id="out-bar"></span></div>
@@ -24,52 +27,72 @@
   <div class="master">
     <div class="lbl">MASTER</div>
     <input id="master" type="range" min="0" max="1" step="0.001" value="0.7">
-    <div id="master-val" class="val">70%</div>
+    <div id="master-val" class="lcd">70%</div>
   </div>
-  <div class="status" id="ws-status">connecting…</div>
+  <div class="status lcd" id="ws-status">connecting…</div>
 </header>
 
-<aside class="hud-side">
+<aside class="hud-side panel">
+  <div class="plate-lbl">LAI · ลาย</div>
   <div class="modes" id="modes">
-    <button data-mode="1" class="on">TEZETA<small>nostalgic</small></button>
-    <button data-mode="2">BATI<small>lively</small></button>
-    <button data-mode="3">AMBASSEL<small>heroic</small></button>
-    <button data-mode="4">ANCHIHOYE<small>dramatic</small></button>
+    <button data-mode="1" class="on">LAI YAI<small>deep · lament</small></button>
+    <button data-mode="2">LAI NOI<small>bright · tender</small></button>
+    <button data-mode="3">LAI SUTSANAEN<small>stately · old</small></button>
+    <button data-mode="4">LAI PO SAI<small>lively · dance</small></button>
+    <button data-mode="5">LAI SOI<small>flowing · teasing</small></button>
   </div>
-  <div class="readout">
+  <div class="readout lcd">
     <div><span class="lbl">CHAOS</span><span id="chaos-val">25%</span></div>
-    <div><span class="lbl">BPM</span><span id="bpm-val">88</span></div>
+    <div><span class="lbl">BPM</span><span id="bpm-val">126</span></div>
     <div><span class="lbl">LISS a:b:c</span><span id="liss-val">1 : 1 : 1</span></div>
+    <div><span class="lbl">SCALE</span><span id="scale-val">A C D E G</span></div>
   </div>
-  <div class="hint">Touch on the curve to play.<br>Voices: <b>krar · masinko · washint · kebero</b>.<br>Sound emits from the Pi only.</div>
+  <div class="hint">Play the keyboard (mouse, touch or <b>Z…/</b> &amp; <b>Q…Y</b>) or touch the curve.<br>Drag off the curve to orbit.</div>
 </aside>
 
-<footer class="hud-bot">
-  <div class="voices" id="voices">
-    <button data-voice="0" class="v on">KRAR</button>
-    <button data-voice="1" class="v">MASINKO</button>
-    <button data-voice="2" class="v">WASHINT</button>
-    <button data-voice="3" class="v">KEBERO</button>
+<footer class="hud-bot panel">
+  <div class="row">
+    <div class="voices" id="voices">
+      <button data-voice="0" class="v on">KHAEN</button>
+      <button data-voice="1" class="v">PHIN</button>
+      <button data-voice="2" class="v">SO</button>
+      <button data-voice="3" class="v">KLONG</button>
+    </div>
+    <div class="tuning">
+      <label>TEMPERAMENT
+        <select id="temperament">
+          <option value="werckmeister3" selected>WERCKMEISTER III</option>
+          <option value="kirnberger3">KIRNBERGER III</option>
+          <option value="vallotti">VALLOTTI</option>
+          <option value="young2">YOUNG II</option>
+          <option value="equal">12-TET (EQUAL)</option>
+        </select>
+      </label>
+      <label>KEY
+        <span class="stepper"><button id="key-down" type="button">−</button><span id="key-val" class="lcd">±0</span><button id="key-up" type="button">+</button></span>
+      </label>
+    </div>
+    <div class="ctrls">
+      <button id="drum-btn" class="on">KLONG + CHING</button>
+      <button id="rec-btn" class="rec">REC</button>
+    </div>
   </div>
+  <div class="keyboard" id="keyboard" aria-label="Pentatonic keyboard"></div>
   <div class="sliders">
     <label>CHAOS <input id="chaos" type="range" min="0" max="1" step="0.001" value="0.25"></label>
-    <label>BPM <input id="bpm" type="range" min="40" max="180" step="0.5" value="88"></label>
-    <label>ROOT <input id="root" type="range" min="80" max="440" step="0.5" value="220"></label>
+    <label>BPM <input id="bpm" type="range" min="40" max="200" step="0.5" value="126"></label>
     <label>REV <input id="reverb_mix" type="range" min="0" max="1" step="0.001" value="0.25"></label>
     <label>DELAY <input id="delay_fb" type="range" min="0" max="0.92" step="0.001" value="0.4"></label>
   </div>
-  <div class="ctrls">
-    <button id="drum-btn" class="on">▶ KEBERO</button>
-    <button id="rec-btn" class="rec">● REC</button>
-  </div>
 </footer>
 
+<script src="tuning.js"></script>
 <script src="synth.js"></script>
 <script src="engine.js"></script>
 <script type="module" src="app.js"></script>
 <script nomodule>
   var msg = document.createElement('div');
-  msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ffd47a;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6';
+  msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#0b0d10;color:#ffb000;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6';
   msg.innerHTML = 'Browser not supported.<br><br>This app requires Safari 16.4+ or a modern browser.<br><br>Your device is too old. Please use a newer device or browser.';
   document.body.appendChild(msg);
 </script>
@@ -77,7 +100,7 @@
   // Fallback for syntax errors in modern browsers
   if (!window.requestAnimationFrame) {
     var msg = document.createElement('div');
-    msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#03060a;color:#ff6666;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6;font-weight:bold';
+    msg.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#0b0d10;color:#ff6666;font-family:system-ui;text-align:center;padding:20px;z-index:99;line-height:1.6;font-weight:bold';
     msg.innerHTML = 'Browser Error<br><br>This browser is not compatible with this app.';
     document.body.appendChild(msg);
   }
