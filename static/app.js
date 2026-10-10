@@ -147,18 +147,17 @@ try {
 if (!renderer) throw new Error('WebGL renderer initialization failed');
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, COARSE ? 1.5 : 2));
-renderer.setClearColor(0xe4e2dd, 1);
+renderer.setClearColor(0x070605, 1);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 9);
 camera.lookAt(0, 0, 0);
 
 // lights
-scene.add(new THREE.HemisphereLight(0xffffff, 0xd9d6cf, 1.2));
-scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(5, 6, 5); scene.add(key);
-const fill = new THREE.DirectionalLight(0xfff1e0, 0.6); fill.position.set(-6, 2, 3); scene.add(fill);
-const rim = new THREE.PointLight(0xff5a00, 0.6, 30); rim.position.set(-5, -3, -2); scene.add(rim);
+// dim, warm, low light: the globe lit like a stone by firelight
+scene.add(new THREE.HemisphereLight(0x8c7a64, 0x0a0806, 0.9));
+const key = new THREE.DirectionalLight(0xffd9a8, 1.4); key.position.set(5, 4, 6); scene.add(key);
+const rim = new THREE.PointLight(0xff6a1a, 2.2, 30); rim.position.set(-6, -3, -2); scene.add(rim);
 
 // =====================================================================
 // Globe
@@ -166,8 +165,28 @@ const rim = new THREE.PointLight(0xff5a00, 0.6, 30); rim.position.set(-5, -3, -2
 const globe = new Globe(scene);
 globe.load().catch(e => showError('Map data failed to load: ' + e.message));
 
+// Layer toggles + satellite time speed + legend
+document.querySelectorAll('#layers [data-layer]').forEach(b => {
+  b.addEventListener('click', () => {
+    const on = !b.classList.contains('on');
+    b.classList.toggle('on', on);
+    globe.setLayer(b.dataset.layer, on);
+  });
+});
+const warpSel = document.getElementById('warp');
+if (warpSel) warpSel.addEventListener('change', () => globe.setWarp(parseFloat(warpSel.value)));
+globe.onSky = groups => {
+  const leg = document.getElementById('sat-legend');
+  if (!leg) return;
+  leg.innerHTML = groups.map(g => `<span><i style="background:${g.color}"></i>${g.name} <b>${g.count.toLocaleString()}</b></span>`).join('');
+};
+globe.onFiveG = (n, hubs) => {
+  const el = document.getElementById('fiveg-note');
+  if (el) el.textContent = `${n} countries · ${hubs} hubs`;
+};
+
 // Touch handles — one per voice (khaen, phin, so, klong)
-const voiceColors = [0xff5a00, 0x1d1d1b, 0x7a7770, 0xc4320a];
+const voiceColors = [0xff8a2a, 0xe8dcc0, 0x7fb3ff, 0xff3b1a];
 const voiceLabels = ['khaen', 'phin', 'so', 'klong'];
 const handles = voiceColors.map((c, i) => {
   const g = new THREE.SphereGeometry(0.07, 18, 18);
@@ -300,7 +319,7 @@ function buildPatchbay() {
     for (let b = 0; b < nB; b++) {
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', '#ff5a00');
+      path.setAttribute('stroke', '#ff7a2a');
       path.setAttribute('stroke-width', '1');
       path.setAttribute('opacity', '0.2');
       svg.appendChild(path);
@@ -310,7 +329,7 @@ function buildPatchbay() {
   const drawNode = (p, label, color) => {
     const c = document.createElementNS(SVG_NS, 'circle');
     c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 9);
-    c.setAttribute('fill', '#f6f5f2'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '1.5');
+    c.setAttribute('fill', '#0d0b09'); c.setAttribute('stroke', color); c.setAttribute('stroke-width', '1.2');
     svg.appendChild(c);
     // jack socket
     const dot = document.createElementNS(SVG_NS, 'circle');
@@ -320,16 +339,16 @@ function buildPatchbay() {
     const t = document.createElementNS(SVG_NS, 'text');
     t.setAttribute('x', p.x); t.setAttribute('y', p.y + 22);
     t.setAttribute('fill', color);
-    t.setAttribute('font-family', '"IBM Plex Mono", ui-monospace, monospace');
+    t.setAttribute('font-family', '"Cinzel", Georgia, serif');
     t.setAttribute('font-size', '9');
     t.setAttribute('text-anchor', 'middle');
     t.setAttribute('letter-spacing', '1.5');
     t.textContent = label;
     svg.appendChild(t);
   };
-  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#1d1d1b');
+  for (let i = 0; i < 4; i++) drawNode(voicePts[i], voiceLabels[i].toUpperCase(), '#c9a45c');
   const busLabels = MATRIX_COLS;
-  for (let i = 0; i < nB; i++) drawNode(busPts[i], busLabels[i], '#7a7770');
+  for (let i = 0; i < nB; i++) drawNode(busPts[i], busLabels[i], '#8c8170');
 }
 window.addEventListener('resize', buildPatchbay);
 buildPatchbay();

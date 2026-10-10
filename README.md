@@ -6,8 +6,8 @@
 > step-sequenced drum machine, each with its own hand-controlled FX rig
 > (pre-amp EQ, amp + cabinet simulator, a six-channel parallel wet-dry-wet
 > mixer with eight reverbs and six delays, a manual signal network, IR
-> simulation). Minimal industrial look: flat warm grey, hairlines, one
-> orange accent.
+> simulation). Dark-fantasy look: soot-black stone, tarnished gold, ember
+> glow, inscriptional capitals.
 >
 > **Play:** https://xboxzero.github.io/solarmix/
 
@@ -71,13 +71,26 @@ chaos = 1 ─► routing follows the qubit-entangled coefficients
 
 ## The globe
 
-The 3D view is the Earth with every submarine fibre-optic cable on
-TeleGeography's Submarine Cable Map (about 700 systems) and their landing
-stations. **Each cable is a string you can play:** touch it and the voice
-sounds; the position along the cable, from one end to the other, picks one of
-the five notes of the current lai. The struck cable lights up in the voice's
-colour and its name appears in the side panel. Drag anywhere off the cables to
-turn the globe; left alone it drifts slowly.
+A dark 3D Earth with three layers, toggled in the **Realm** panel:
+
+- **Cables** — every submarine fibre-optic cable on TeleGeography's Submarine
+  Cable Map (about 700 systems) and their landing stations, glowing like
+  embers. **Each cable is a string you can play:** touch it and the voice
+  sounds; the position along the cable, from one end to the other, picks one
+  of the five notes of the current lai. The struck cable lights up in the
+  voice's colour and its name appears in the side panel.
+- **Satellites** — about 12,400 communication and navigation satellites from a
+  CelesTrak orbital-element snapshot: Starlink, OneWeb, Iridium, GPS and the
+  geostationary belt, each constellation in its own colour. Positions are
+  computed on the GPU from simplified circular orbits; altitude is
+  compressed (not to scale) so the GPS and geostationary rings stay in view.
+  **Orbit speed** runs them in real time or up to 3600× faster.
+- **5G** — countries with commercial 5G service glow on the surface, and major
+  5G hubs pulse. This is an approximate, illustrative layer (compiled from
+  public operator announcements, 2025), not a coverage map.
+
+Drag anywhere off the cables to turn the globe; left alone it drifts slowly.
+Embers drift up around it.
 
 ## FX rigs
 
@@ -177,15 +190,15 @@ Works in current Chrome, Firefox, Edge and Safari 16.4+, desktop or mobile.
 ```
 static/
 ├── index.html          # page + HUD markup
-├── style.css           # steel machine-panel theme
+├── style.css           # dark-fantasy theme
 ├── tuning.js           # lai + well-temperament tables
 ├── synth.js            # Web Audio voices, ching, send matrix
 ├── fx.js               # FX rigs: pre-amp EQ, amp + cab sim, reverbs, delays, mixer, network, IR
 ├── fxrack.js           # rack UI: Keys FX, Drum FX and drum machine pages
 ├── engine.js           # state, qubit router, pitch mapping, drum sequencer, recorder
 ├── app.js              # scene, keyboard, patchbay overlay, HUD
-├── globe.js            # 3D Earth + submarine cables, cable picking
-├── data/               # cables.json, landing.json, land.json (see Credits)
+├── globe.js            # 3D Earth: cables (playable), satellites, 5G, embers
+├── data/               # cables, landing, land, sats, fiveg (see Credits)
 └── vendor/three.module.js
 ```
 
@@ -198,9 +211,14 @@ tree; it's still in the git history if it's ever needed again.
   Map](https://www.submarinecablemap.com/), licensed CC BY-NC-SA 3.0
   (non-commercial, attribution, share-alike). The files in `static/data/`
   derived from it (`cables.json`, `landing.json`) stay under that licence.
-- **Coastlines:** [Natural Earth](https://www.naturalearthdata.com/) 1:110m
-  land, public domain, via the `world-atlas` package.
-- `tools/build_map_data.py` rebuilds `static/data/` from the source files.
+- **Coastlines and country shapes:** [Natural Earth](https://www.naturalearthdata.com/)
+  1:110m, public domain, via the `world-atlas` package.
+- **Satellites:** orbital elements from [CelesTrak](https://celestrak.org/)
+  (GP data, originally from the US Space Force), snapshot in `static/data/sats.json`.
+- **5G layer:** countries with commercial 5G service and major hub cities,
+  approximate and illustrative.
+- `tools/build_map_data.py` (cables, coastlines) and `tools/build_sky_data.py`
+  (satellites, 5G) rebuild `static/data/` from the source files.
 
 ## License
 

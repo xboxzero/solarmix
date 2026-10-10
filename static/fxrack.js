@@ -344,7 +344,7 @@ export function buildRack(root, { engine, synth, send }) {
     page.append(el('p', 'lede', lede));
 
     // 1 Pre-amp EQ
-    page.append(h2('1', 'Pre-amp EQ', 'per source, before the amp'));
+    page.append(h2('1', 'Pre-amp EQ', 'on the amp bus, before the amp'));
     const { u: eqU, body: eqB } = card('Equaliser', 'input · filters · 4 bands', 'pre.on', 'eq');
     const eqBands = el('div', 'blocks-row');
     blocks(eqBands, PRE_EQ);
