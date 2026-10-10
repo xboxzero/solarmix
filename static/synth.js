@@ -20,8 +20,18 @@ class MorlamSynth {
     if (this.isInitialized) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('Web Audio not supported');
-    const ctx = new AC({ latencyHint: 'interactive' });
+    // iOS 17+: play through the ringer/silent switch like a media app
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* not supported */ }
+    let ctx;
+    try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }
     this.ctx = this.audioContext = ctx;
+
+    // Unlock while still inside the user's tap, before the (heavier) graph
+    // build: resume, and start a one-sample silent buffer (old iOS needs it).
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    const blip = ctx.createBufferSource();
+    blip.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    blip.connect(ctx.destination); blip.start(0);
 
     // master → compressor → analyser → speakers (+ recorder tap)
     this.masterGain = ctx.createGain();
