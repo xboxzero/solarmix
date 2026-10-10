@@ -1,37 +1,101 @@
-// morlam FX rig — everything after the voices, all hand-controlled.
+// morlam FX rigs — two independent, hand-controlled effect rigs:
+//   KEYS   the four keyboard/globe voices (khaen, phin, so, klong)
+//   DRUMS  the six drum-machine tracks
 //
-//   voice ─► GAIN (input · drive · clip) ─► AMP (tone stack · level)   ×4, one per voice
-//         ─► send matrix (4 voices × 4 channels)
-//         ─► parallel W-D-W mixer:
-//              WET L  reverb → phase shifter
-//              DRY    drive (clean / low gain / hi gain) → compressor
-//              WET R  delay → phase shifter
-//              MOD    chorus / flanger / phaser
-//              each channel then: fader → pan → mute/solo
-//         ─► IR SIM (cabinet / room impulse response, dry ⇄ wet) ─► master
+// One rig:
 //
-// Parameters are addressed by path ("amp.bass", "ch.2.pan", …) through
-// FxRig.set(path, value); FX_DEFAULTS holds the starting rig.
+//   source ─► PRE-AMP EQ ─► AMP SIM ─► CAB SIM        (one chain per source)
+//          ─► signal network: every source → every channel (send matrix)
+//          ─► six parallel channels (wet · dry · wet):
+//               REV A · DLY A │ DRY │ DLY B · REV B │ MOD
+//               reverbs & delays each have a type, a phase shifter insert,
+//               DRY has drive + compressor, MOD is chorus / flanger / phaser
+//             plus FX → FX feeds (mod → delays/reverbs, delays → reverbs)
+//          ─► each channel: fader → pan → mute/solo → mix
+//          ─► IR SIM ─► rig level ─► master
+//
+// Parameters are addressed by path ("pre.lm", "da.type", "ch.2.pan", …)
+// through FxRig.set(path, value); FX_DEFAULTS[kind] holds the starting rig.
 
-const FX_DEFAULTS = {
-  'gain.on': true, 'gain.input': 0, 'gain.drive': 0.2, 'gain.clip': 'soft',
-  'amp.on': true, 'amp.bass': 0, 'amp.mid': 0, 'amp.treble': 0, 'amp.presence': 0, 'amp.level': 0.8,
-  'mod.on': true, 'mod.type': 'chorus', 'mod.rate': 0.8, 'mod.depth': 0.5, 'mod.feedback': 0.3,
-  'ph1.on': true, 'ph1.rate': 0.3, 'ph1.depth': 0.6, 'ph1.fdbk': 0.4, 'ph1.mix': 0.5,
-  'ph2.on': true, 'ph2.rate': 0.37, 'ph2.depth': 0.6, 'ph2.fdbk': 0.4, 'ph2.mix': 0.5,
-  'dry.mode': 'clean', 'dry.gain': 0.5, 'dry.tone': 6000, 'dry.level': 1,
-  'dry.comp': false, 'dry.thresh': -18, 'dry.ratio': 4,
-  'rev.size': 2.6, 'rev.decay': 2.2, 'rev.predelay': 20, 'rev.tone': 6000,
-  'dly.time': 360, 'dly.sync': true, 'dly.feedback': 0.4, 'dly.tone': 3200,
-  // channels: 0 DRY · 1 WET L · 2 WET R · 3 MOD
-  'ch.0.level': 0.9, 'ch.0.pan': 0, 'ch.0.mute': false, 'ch.0.solo': false,
-  'ch.1.level': 0.7, 'ch.1.pan': -0.6, 'ch.1.mute': false, 'ch.1.solo': false,
-  'ch.2.level': 0.6, 'ch.2.pan': 0.6, 'ch.2.mute': false, 'ch.2.solo': false,
-  'ch.3.level': 0.5, 'ch.3.pan': 0, 'ch.3.mute': false, 'ch.3.solo': false,
-  'ir.type': 'room', 'ir.mix': 0.3, 'ir.level': 1,
-  'bpm': 126,
+const CHANNELS = ['dry', 'ra', 'da', 'rb', 'db', 'mod'];
+const CHANNEL_NAMES = ['DRY', 'REV A', 'DLY A', 'REV B', 'DLY B', 'MOD'];
+// FX → FX feeds allowed (acyclic): mod → delays/reverbs, delays → reverbs
+const NET_FEEDS = [['mod', 'da'], ['mod', 'db'], ['mod', 'ra'], ['mod', 'rb'], ['da', 'ra'], ['da', 'rb'], ['db', 'ra'], ['db', 'rb']];
+
+const AMP_MODELS = {
+  clean:  { name: 'Clean',       hp: 40,  g1: [1, 4],    c1: 'soft', d1: 0.25, inter: 12000, g2: [1, 1], c2: null,   d2: 0,    mid: 500, bright: 3, low: 0, post: 12000, makeup: 0.85 },
+  tube:   { name: 'Tube warm',   hp: 60,  g1: [1.5, 15], c1: 'tube', d1: 0.45, inter: 9000,  g2: [1, 1], c2: null,   d2: 0,    mid: 600, bright: 0, low: 1, post: 7000,  makeup: 0.45 },
+  crunch: { name: 'Crunch',      hp: 90,  g1: [2, 25],   c1: 'soft', d1: 0.5,  inter: 7000,  g2: [1, 3], c2: 'hard', d2: 0.3,  mid: 800, bright: 2, low: 0, post: 7500,  makeup: 0.21 },
+  lead:   { name: 'Lead (hi gain)', hp: 200, g1: [8, 80], c1: 'fuzz', d1: 0.8, inter: 6000,  g2: [2, 8], c2: 'soft', d2: 0.55, mid: 650, bright: 0, low: 0, post: 6500,  makeup: 0.2 },
+  bass:   { name: 'Bass',        hp: 25,  g1: [1, 8],    c1: 'soft', d1: 0.3,  inter: 5000,  g2: [1, 1], c2: null,   d2: 0,    mid: 400, bright: 0, low: 4, post: 5000,  makeup: 0.55 },
+  fuzz:   { name: 'Fuzz',        hp: 120, g1: [20, 200], c1: 'hard', d1: 1,    inter: 5000,  g2: [1, 2], c2: 'soft', d2: 0.6,  mid: 900, bright: 0, low: 0, post: 5000,  makeup: 0.2 },
 };
-const CHANNEL_NAMES = ['DRY', 'WET L', 'WET R', 'MOD'];
+
+const CAB_TYPES = {
+  off:    { name: 'Off' },
+  open:   { name: '1×12 open back', hp: 110, low: [160, 1], notch: [1200, -2], pres: [3000, 5], lp: 7000 },
+  c112:   { name: '1×12 closed',    hp: 90,  low: [130, 3], notch: [1000, -3], pres: [2500, 4], lp: 5500 },
+  c212:   { name: '2×12',           hp: 80,  low: [110, 4], notch: [800, -4],  pres: [2000, 3], lp: 5000 },
+  c412:   { name: '4×12',           hp: 70,  low: [100, 6], notch: [650, -5],  pres: [1800, 3], lp: 4200 },
+  bass15: { name: 'Bass 1×15',      hp: 40,  low: [70, 5],  notch: [500, -3],  pres: [1500, 2], lp: 3500 },
+};
+
+const REVERB_TYPES = {
+  room:      { name: 'Room',      length: 0.8, decay: 0.18, early: 8, earlySpread: 0.03, lp: 7000 },
+  chamber:   { name: 'Chamber',   length: 1.5, decay: 0.35, early: 10, earlySpread: 0.04, lp: 6500 },
+  hall:      { name: 'Hall',      length: 3.0, decay: 0.9, predelay: 0.02, early: 6, earlySpread: 0.06, lp: 5000 },
+  cathedral: { name: 'Cathedral', length: 6.0, decay: 2.2, predelay: 0.03, early: 4, earlySpread: 0.1, lp: 4000 },
+  plate:     { name: 'Plate',     length: 2.0, decay: 0.55, hp: 220, lp: 9000 },
+  spring:    { name: 'Spring',    length: 2.0, decay: 0.45, comb: 0.031, hp: 250, lp: 4500 },
+  gated:     { name: 'Gated',     length: 0.45, decay: 5, gate: true, lp: 8000 },
+  reverse:   { name: 'Reverse',   length: 1.6, decay: 0.5, reverse: true, lp: 7000 },
+};
+
+const DELAY_TYPES = {
+  digital:  { name: 'Digital' },
+  tape:     { name: 'Tape echo' },
+  analog:   { name: 'Analog (BBD)' },
+  pingpong: { name: 'Ping-pong' },
+  multitap: { name: 'Multi-tap' },
+  slapback: { name: 'Slapback' },
+};
+const DELAY_DIVS = { '1/2': 2, '1/4': 1, '3/16': 0.75, '1/8': 0.5, '1/8T': 1 / 3, '1/16': 0.25 };
+
+function rigDefaults(kind) {
+  const keys = kind === 'keys';
+  const P = {
+    'rig.level': 1,
+    'pre.on': true, 'pre.input': 0, 'pre.hpf': 20, 'pre.lpf': 20000,
+    'pre.lowF': 120, 'pre.low': 0, 'pre.lmF': 500, 'pre.lm': 0, 'pre.lmQ': 1,
+    'pre.hmF': 2500, 'pre.hm': 0, 'pre.hmQ': 1, 'pre.highF': 6000, 'pre.high': 0,
+    'amp.on': keys, 'amp.model': 'clean', 'amp.drive': 0.2,
+    'amp.bass': 0, 'amp.mid': 0, 'amp.treble': 0, 'amp.presence': 0, 'amp.master': 0.8,
+    'cab.type': 'off', 'cab.mic': 0,
+    'mod.on': true, 'mod.type': 'chorus', 'mod.rate': 0.8, 'mod.depth': 0.5, 'mod.feedback': 0.3,
+    'ra.type': keys ? 'room' : 'room', 'ra.size': 1, 'ra.decay': 1, 'ra.pre': 20, 'ra.tone': 6000, 'ra.lowcut': 80,
+    'rb.type': keys ? 'plate' : 'gated', 'rb.size': 1, 'rb.decay': 1, 'rb.pre': 10, 'rb.tone': 8000, 'rb.lowcut': 150,
+    'da.type': 'digital', 'da.time': 360, 'da.sync': true, 'da.div': '3/16', 'da.fdbk': 0.4, 'da.tone': 3200, 'da.mod': 0.2,
+    'db.type': 'pingpong', 'db.time': 250, 'db.sync': true, 'db.div': '1/4', 'db.fdbk': 0.35, 'db.tone': 4000, 'db.mod': 0.2,
+    'dry.mode': 'clean', 'dry.gain': 0.5, 'dry.tone': keys ? 6000 : 12000, 'dry.level': 1,
+    'dry.comp': !keys, 'dry.thresh': -18, 'dry.ratio': 4,
+    'ir.type': 'room', 'ir.mix': keys ? 0.3 : 0.2, 'ir.level': 1,
+    'bpm': 126,
+  };
+  for (const ph of ['phra', 'phda', 'phrb', 'phdb']) {
+    P[ph + '.on'] = keys && (ph === 'phra' || ph === 'phda');
+    P[ph + '.rate'] = { phra: 0.3, phda: 0.37, phrb: 0.23, phdb: 0.31 }[ph];
+    P[ph + '.depth'] = 0.6; P[ph + '.fdbk'] = 0.4; P[ph + '.mix'] = 0.5;
+  }
+  // channels: dry · rev A · dly A · rev B · dly B · mod
+  const lv = keys ? [0.9, 0.6, 0.5, 0.3, 0.3, 0.5] : [0.9, 0.4, 0.2, 0.3, 0, 0];
+  const pan = [0, -0.7, -0.4, 0.7, 0.4, 0];
+  CHANNELS.forEach((_, i) => {
+    P[`ch.${i}.level`] = lv[i]; P[`ch.${i}.pan`] = pan[i]; P[`ch.${i}.mute`] = false; P[`ch.${i}.solo`] = false;
+  });
+  for (const [a, b] of NET_FEEDS) P[`net.${a}.${b}`] = keys && a === 'da' && b === 'ra' ? 0.15 : 0;
+  return P;
+}
+const FX_DEFAULTS = { keys: rigDefaults('keys'), drums: rigDefaults('drums') };
 
 const db2g = db => Math.pow(10, db / 20);
 
@@ -101,6 +165,11 @@ function spaceIR(sr, o) {
     }
     if (o.hp) biquad(d, sr, 'highpass', o.hp, 0.7);
     biquad(d, sr, 'lowpass', o.lp, 0.7);
+    if (o.gate) { // gated: hold, then slam shut over the last 8%
+      const cut = Math.floor(len * 0.92);
+      for (let i = cut; i < len; i++) d[i] *= 1 - (i - cut) / (len - cut);
+    }
+    if (o.reverse) d.reverse();
     return d;
   });
 }
@@ -133,31 +202,15 @@ function clipCurve(type, drive) {
     else if (type === 'fuzz') {
       // asymmetric: positive half saturates hard, negative half softer
       y = x >= 0 ? (1 - Math.exp(-k * x)) / (1 - Math.exp(-k)) : -0.8 * (1 - Math.exp(k * x)) / (1 - Math.exp(-k));
+    } else if (type === 'tube') {
+      // asymmetric soft clip: the negative half compresses earlier
+      y = x >= 0 ? Math.tanh(k * x) / Math.tanh(k) : 0.85 * Math.tanh(1.6 * k * x) / Math.tanh(1.6 * k);
     } else y = Math.tanh(k * x) / Math.tanh(k);
     c[i] = y;
   }
   return c;
 }
 
-// ---------------------------------------------------------------------------
-// Per-voice insert: GAIN → AMP
-// ---------------------------------------------------------------------------
-class AmpChain {
-  constructor(ctx) {
-    this.input = ctx.createGain();
-    this.shaper = ctx.createWaveShaper(); this.shaper.oversample = '4x';
-    this.makeup = ctx.createGain();
-    const eq = (type, f, q) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; return b; };
-    this.bass = eq('lowshelf', 120);
-    this.mid = eq('peaking', 750, 0.8);
-    this.treble = eq('highshelf', 3200);
-    this.presence = eq('peaking', 5200, 1.2);
-    this.output = ctx.createGain();
-    this.input.connect(this.shaper); this.shaper.connect(this.makeup);
-    this.makeup.connect(this.bass); this.bass.connect(this.mid); this.mid.connect(this.treble);
-    this.treble.connect(this.presence); this.presence.connect(this.output);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Phase shifter insert: 6 allpass stages swept by an LFO, feedback, dry/wet.
@@ -257,184 +310,375 @@ class DryDrive {
   }
 }
 
+const biq = (ctx, type, f, q, gain) => {
+  const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f;
+  if (q !== undefined) b.Q.value = q; if (gain !== undefined) b.gain.value = gain;
+  return b;
+};
+function chain(nodes) { for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]); }
+
+// ---------------------------------------------------------------------------
+// Per-source chain: PRE-AMP EQ → AMP SIM → CAB SIM
+// ---------------------------------------------------------------------------
+class SourceChain {
+  constructor(ctx) {
+    this.input = ctx.createGain();
+    // pre-amp EQ
+    this.inGain = ctx.createGain();
+    this.hpf = biq(ctx, 'highpass', 20, 0.707);
+    this.low = biq(ctx, 'lowshelf', 120, undefined, 0);
+    this.lm = biq(ctx, 'peaking', 500, 1, 0);
+    this.hm = biq(ctx, 'peaking', 2500, 1, 0);
+    this.high = biq(ctx, 'highshelf', 6000, undefined, 0);
+    this.lpf = biq(ctx, 'lowpass', 20000, 0.707);
+    // amp
+    this.aHp = biq(ctx, 'highpass', 10, 0.7);
+    this.aPre1 = ctx.createGain();
+    this.sh1 = ctx.createWaveShaper(); this.sh1.oversample = '4x';
+    this.aInter = biq(ctx, 'lowpass', 20000, 0.7);
+    this.aPre2 = ctx.createGain();
+    this.sh2 = ctx.createWaveShaper(); this.sh2.oversample = '4x';
+    this.tBass = biq(ctx, 'lowshelf', 100, undefined, 0);
+    this.tMid = biq(ctx, 'peaking', 600, 0.8, 0);
+    this.tTreble = biq(ctx, 'highshelf', 2500, undefined, 0);
+    this.tPres = biq(ctx, 'peaking', 4500, 1.2, 0);
+    this.aPost = biq(ctx, 'lowpass', 20000, 0.7);
+    this.aMakeup = ctx.createGain();
+    this.aMaster = ctx.createGain();
+    // cab
+    this.cHp = biq(ctx, 'highpass', 10, 0.8);
+    this.cLow = biq(ctx, 'peaking', 120, 1.2, 0);
+    this.cNotch = biq(ctx, 'peaking', 800, 1, 0);
+    this.cPres = biq(ctx, 'peaking', 2500, 1.4, 0);
+    this.cLp1 = biq(ctx, 'lowpass', 20000, 0.8);
+    this.cLp2 = biq(ctx, 'lowpass', 20000, 0.7);
+    this.output = ctx.createGain();
+    chain([this.input, this.inGain, this.hpf, this.low, this.lm, this.hm, this.high, this.lpf,
+      this.aHp, this.aPre1, this.sh1, this.aInter, this.aPre2, this.sh2,
+      this.tBass, this.tMid, this.tTreble, this.tPres, this.aPost, this.aMakeup, this.aMaster,
+      this.cHp, this.cLow, this.cNotch, this.cPres, this.cLp1, this.cLp2, this.output]);
+  }
+  applyPre(P, ramp) {
+    const on = P['pre.on'];
+    ramp(this.inGain.gain, on ? db2g(P['pre.input']) : 1);
+    ramp(this.hpf.frequency, on ? P['pre.hpf'] : 10);
+    ramp(this.lpf.frequency, on ? P['pre.lpf'] : 22000);
+    ramp(this.low.frequency, P['pre.lowF']); ramp(this.low.gain, on ? P['pre.low'] : 0);
+    ramp(this.lm.frequency, P['pre.lmF']); ramp(this.lm.gain, on ? P['pre.lm'] : 0); ramp(this.lm.Q, P['pre.lmQ']);
+    ramp(this.hm.frequency, P['pre.hmF']); ramp(this.hm.gain, on ? P['pre.hm'] : 0); ramp(this.hm.Q, P['pre.hmQ']);
+    ramp(this.high.frequency, P['pre.highF']); ramp(this.high.gain, on ? P['pre.high'] : 0);
+  }
+  applyAmp(P, ramp) {
+    const on = P['amp.on'], m = AMP_MODELS[P['amp.model']] || AMP_MODELS.clean, d = P['amp.drive'];
+    if (!on) {
+      ramp(this.aHp.frequency, 10); ramp(this.aPre1.gain, 1); this.sh1.curve = null;
+      ramp(this.aInter.frequency, 20000); ramp(this.aPre2.gain, 1); this.sh2.curve = null;
+      for (const f of [this.tBass, this.tMid, this.tTreble, this.tPres]) ramp(f.gain, 0);
+      ramp(this.aPost.frequency, 20000); ramp(this.aMakeup.gain, 1); ramp(this.aMaster.gain, 1);
+      return;
+    }
+    const g1 = m.g1[0] + (m.g1[1] - m.g1[0]) * d * d, g2 = m.g2[0] + (m.g2[1] - m.g2[0]) * d;
+    ramp(this.aHp.frequency, m.hp);
+    ramp(this.aPre1.gain, g1); this.sh1.curve = clipCurve(m.c1, m.d1);
+    ramp(this.aInter.frequency, m.inter);
+    ramp(this.aPre2.gain, g2); this.sh2.curve = m.c2 ? clipCurve(m.c2, m.d2) : null;
+    ramp(this.tBass.gain, P['amp.bass'] + m.low);
+    ramp(this.tMid.frequency, m.mid); ramp(this.tMid.gain, P['amp.mid']);
+    ramp(this.tTreble.gain, P['amp.treble'] + m.bright);
+    ramp(this.tPres.gain, P['amp.presence']);
+    ramp(this.aPost.frequency, m.post);
+    // clean-ish models stay linear-ish, so scale the makeup with their gain
+    ramp(this.aMakeup.gain, m.c2 || m.g1[1] > 20 ? m.makeup : m.makeup / Math.sqrt(g1));
+    ramp(this.aMaster.gain, P['amp.master']);
+  }
+  applyCab(P, ramp) {
+    const c = CAB_TYPES[P['cab.type']], mic = P['cab.mic'];
+    if (!c || !c.lp) {
+      ramp(this.cHp.frequency, 10); for (const f of [this.cLow, this.cNotch, this.cPres]) ramp(f.gain, 0);
+      ramp(this.cLp1.frequency, 20000); ramp(this.cLp2.frequency, 20000);
+      return;
+    }
+    // mic: −1 = off-axis (dark) … +1 = on-axis, close to the cone (bright)
+    const lp = c.lp * Math.pow(2, mic * 0.6);
+    ramp(this.cHp.frequency, c.hp);
+    ramp(this.cLow.frequency, c.low[0]); ramp(this.cLow.gain, c.low[1]);
+    ramp(this.cNotch.frequency, c.notch[0]); ramp(this.cNotch.gain, c.notch[1]);
+    ramp(this.cPres.frequency, c.pres[0]); ramp(this.cPres.gain, c.pres[1] + mic * 3);
+    ramp(this.cLp1.frequency, lp); ramp(this.cLp2.frequency, lp * 1.15);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reverb channel: pre-delay → low cut → convolution (type IR) → tone
+// ---------------------------------------------------------------------------
+class ReverbUnit {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.input = ctx.createGain();
+    this.pre = ctx.createDelay(0.5);
+    this.lowcut = biq(ctx, 'highpass', 80, 0.7);
+    this.conv = ctx.createConvolver();
+    this.tone = biq(ctx, 'lowpass', 6000, 0.7);
+    this.output = ctx.createGain();
+    chain([this.input, this.pre, this.lowcut, this.conv, this.tone, this.output]);
+    this._key = '';
+  }
+  apply(P, x, ramp, initial) {
+    ramp(this.pre.delayTime, P[x + '.pre'] / 1000, 0.05);
+    ramp(this.tone.frequency, P[x + '.tone'], 0.05);
+    ramp(this.lowcut.frequency, P[x + '.lowcut'], 0.05);
+    const key = [P[x + '.type'], P[x + '.size'], P[x + '.decay']].join('|');
+    if (key === this._key) return;
+    this._key = key;
+    clearTimeout(this._t);
+    const build = () => {
+      const t = REVERB_TYPES[P[x + '.type']] || REVERB_TYPES.room, size = P[x + '.size'], dec = P[x + '.decay'];
+      const o = Object.assign({}, t, { length: Math.min(10, t.length * size), decay: t.decay * size * dec });
+      this.conv.buffer = toBuffer(this.ctx, spaceIR(this.ctx.sampleRate, o));
+    };
+    if (initial) build(); else this._t = setTimeout(build, 120); // debounce knob drags
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delay channel: the graph is rebuilt when the type changes.
+// ---------------------------------------------------------------------------
+class DelayUnit {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.input = ctx.createGain();
+    this.output = ctx.createGain();
+    this.nodes = []; this.oscs = [];
+    this.type = null;
+  }
+  _n(node, props = {}) { Object.assign(node, props); this.nodes.push(node); return node; }
+  _delay(mult) { return this._n(this.ctx.createDelay(2.5), { _mult: mult }); }
+  _gain(v = 1, props) { const g = this._n(this.ctx.createGain(), props); g.gain.value = v; return g; }
+  _lfo(freq, scale, targets) {
+    const o = this.ctx.createOscillator(); o.frequency.value = freq; o.start(); this.oscs.push(o);
+    const g = this._gain(0, { _modScale: scale }); o.connect(g);
+    for (const d of targets) g.connect(d.delayTime);
+    this.mods.push(g);
+  }
+  build(type) {
+    const ctx = this.ctx;
+    this.input.disconnect();
+    for (const n of this.nodes) n.disconnect();
+    for (const o of this.oscs) { o.stop(); o.disconnect(); }
+    this.nodes = []; this.oscs = [];
+    this.delays = []; this.fbs = []; this.tones = []; this.mods = [];
+    this.type = type;
+    const tone = (scale = 1) => { const t = this._n(biq(ctx, 'lowpass', 3200, 0.7), { _scale: scale }); this.tones.push(t); return t; };
+    const fb = (scale = 1) => { const g = this._gain(0.4, { _scale: scale }); this.fbs.push(g); return g; };
+    const out = this.output;
+    if (type === 'pingpong') {
+      const dL = this._delay(1), dR = this._delay(1), tL = tone(), tR = tone(), fL = fb(), fR = fb();
+      const merge = this._n(ctx.createChannelMerger(2));
+      this.input.connect(dL);
+      dL.connect(tL); tL.connect(fL); fL.connect(dR); tL.connect(merge, 0, 0);
+      dR.connect(tR); tR.connect(fR); fR.connect(dL); tR.connect(merge, 0, 1);
+      merge.connect(out);
+      this.delays.push(dL, dR);
+    } else if (type === 'multitap') {
+      const mix = this._gain(1), t = tone(), f = fb(0.7);
+      this.input.connect(mix);
+      [[0.25, 0.8], [0.5, 0.6], [0.75, 0.45], [1, 0.35]].forEach(([m, lvl], i) => {
+        const d = this._delay(m), g = this._gain(lvl);
+        mix.connect(d); d.connect(g); g.connect(t);
+        this.delays.push(d);
+        if (i === 3) { d.connect(f); f.connect(mix); }
+      });
+      t.connect(out);
+    } else if (type === 'tape') {
+      const sat = this._n(ctx.createWaveShaper()); sat.curve = clipCurve('soft', 0.12); // gentle: only loud repeats saturate
+      const d = this._delay(1), t = tone(0.8), hp = this._n(biq(ctx, 'highpass', 120, 0.7)), f = fb();
+      this.input.connect(sat); sat.connect(d); d.connect(t); t.connect(hp); hp.connect(out); hp.connect(f); f.connect(d);
+      this.delays.push(d);
+      this._lfo(0.5, 0.004, [d]);   // wow
+      this._lfo(6.5, 0.0007, [d]);  // flutter
+    } else if (type === 'analog') {
+      const d = this._delay(1), t = tone(0.45), clip = this._n(ctx.createWaveShaper()), f = fb();
+      clip.curve = clipCurve('soft', 0.12);
+      this.input.connect(d); d.connect(t); t.connect(clip); clip.connect(out); clip.connect(f); f.connect(d);
+      this.delays.push(d);
+      this._lfo(0.3, 0.0015, [d]);
+    } else if (type === 'slapback') {
+      const d = this._delay(1), t = tone(), f = fb(0.15);
+      d._slap = true;
+      this.input.connect(d); d.connect(t); t.connect(out); t.connect(f); f.connect(d);
+      this.delays.push(d);
+    } else { // digital
+      const d = this._delay(1), t = tone(), f = fb();
+      this.input.connect(d); d.connect(out); d.connect(t); t.connect(f); f.connect(d);
+      this.delays.push(d);
+    }
+  }
+  apply(P, x, ramp) {
+    if (P[x + '.type'] !== this.type) this.build(P[x + '.type']);
+    const beats = DELAY_DIVS[P[x + '.div']] || 0.75;
+    const time = P[x + '.sync'] ? Math.min(2, beats * 60 / P['bpm']) : P[x + '.time'] / 1000;
+    for (const d of this.delays) ramp(d.delayTime, d._slap ? Math.min(0.16, time) : Math.min(2.4, time * d._mult), 0.08);
+    for (const f of this.fbs) ramp(f.gain, Math.min(0.92, P[x + '.fdbk']) * f._scale);
+    for (const t of this.tones) ramp(t.frequency, P[x + '.tone'] * t._scale, 0.05);
+    for (const m of this.mods) ramp(m.gain, P[x + '.mod'] * m._modScale, 0.05);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MOD channel: chorus / flanger (modulated delay) or phaser (allpass sweep)
+// ---------------------------------------------------------------------------
+class ModUnit {
+  constructor(ctx) {
+    this.input = ctx.createGain();
+    this.lfo = ctx.createOscillator(); this.lfo.frequency.value = 0.8; this.lfo.start();
+    this.delay = ctx.createDelay(0.1);
+    this.delayLfo = ctx.createGain();
+    this.delayFb = ctx.createGain();
+    this.delayOut = ctx.createGain();
+    this.lfo.connect(this.delayLfo); this.delayLfo.connect(this.delay.delayTime);
+    this.input.connect(this.delay); this.delay.connect(this.delayFb); this.delayFb.connect(this.delay);
+    this.delay.connect(this.delayOut);
+    this.phaseLfo = ctx.createGain();
+    this.lfo.connect(this.phaseLfo);
+    this.allpass = [0, 1, 2, 3].map(() => { const a = biq(ctx, 'allpass', 800, 0.6); this.phaseLfo.connect(a.frequency); return a; });
+    this.phaseFb = ctx.createGain();
+    const loop = ctx.createDelay(0.01);
+    this.phaseOut = ctx.createGain();
+    this.input.connect(this.allpass[0]);
+    chain(this.allpass);
+    this.allpass[3].connect(this.phaseOut);
+    this.allpass[3].connect(this.phaseFb); this.phaseFb.connect(loop); loop.connect(this.allpass[0]);
+    this.output = ctx.createGain();
+    this.delayOut.connect(this.output); this.phaseOut.connect(this.output);
+  }
+  apply(P, ramp) {
+    const type = P['mod.type'], depth = P['mod.depth'], fb = P['mod.feedback'];
+    const isPhaser = type === 'phaser', isFlanger = type === 'flanger';
+    ramp(this.lfo.frequency, P['mod.rate'], 0.05);
+    ramp(this.delay.delayTime, isFlanger ? 0.003 : 0.018, 0.05);
+    ramp(this.delayLfo.gain, isFlanger ? 0.0025 * depth : 0.008 * depth, 0.05);
+    ramp(this.delayFb.gain, isFlanger ? fb * 0.95 : fb * 0.35);
+    ramp(this.phaseLfo.gain, 200 + 1200 * depth, 0.05);
+    ramp(this.phaseFb.gain, fb * 0.7);
+    ramp(this.delayOut.gain, isPhaser ? 0 : 1);
+    ramp(this.phaseOut.gain, isPhaser ? 1 : 0);
+    ramp(this.output.gain, P['mod.on'] ? 1 : 0);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The rig
 // ---------------------------------------------------------------------------
 class FxRig {
-  constructor(ctx, destination) {
+  constructor(ctx, destination, kind, nSources) {
     this.ctx = ctx;
-    this.p = Object.assign({}, FX_DEFAULTS);
-    this.amps = [0, 1, 2, 3].map(() => new AmpChain(ctx));
+    this.kind = kind;
+    this.p = Object.assign({}, FX_DEFAULTS[kind]);
+    this.sources = Array.from({ length: nSources }, () => new SourceChain(ctx));
+    this.inputs = this.sources.map(s => s.input);
     this._levelBuf = new Float32Array(512);
+    const nCh = CHANNELS.length;
 
-    // ---- channel inputs (targets of the send matrix) ----
-    this.inputs = [0, 1, 2, 3].map(() => ctx.createGain());
+    // channel inputs + send matrix (source s → channel c)
+    this.chIn = CHANNELS.map(() => ctx.createGain());
+    this.sends = [];
+    this.sources.forEach((src, s) => CHANNELS.forEach((_, c) => {
+      const g = ctx.createGain(); g.gain.value = 0;
+      src.output.connect(g); g.connect(this.chIn[c]);
+      this.sends[s * nCh + c] = g;
+    }));
+
+    // channel processing
+    this.dry = new DryDrive(ctx);
+    this.rev = { ra: new ReverbUnit(ctx), rb: new ReverbUnit(ctx) };
+    this.dly = { da: new DelayUnit(ctx), db: new DelayUnit(ctx) };
+    this.mod = new ModUnit(ctx);
+    this.ph = { phra: new Phaser(ctx, false), phda: new Phaser(ctx, false), phrb: new Phaser(ctx, true), phdb: new Phaser(ctx, true) };
+    const outs = {};
+    this.chIn[0].connect(this.dry.input); outs.dry = this.dry.output;
+    for (const x of ['ra', 'rb']) { this.chIn[CHANNELS.indexOf(x)].connect(this.rev[x].input); this.rev[x].output.connect(this.ph['ph' + x].input); outs[x] = this.ph['ph' + x].output; }
+    for (const x of ['da', 'db']) { this.chIn[CHANNELS.indexOf(x)].connect(this.dly[x].input); this.dly[x].output.connect(this.ph['ph' + x].input); outs[x] = this.ph['ph' + x].output; }
+    this.chIn[5].connect(this.mod.input); outs.mod = this.mod.output;
+
+    // FX → FX feeds (taken after the channel's processing, before its fader)
+    this.net = {};
+    for (const [a, b] of NET_FEEDS) {
+      const g = ctx.createGain(); g.gain.value = 0;
+      outs[a].connect(g); g.connect(this.chIn[CHANNELS.indexOf(b)]);
+      this.net[`${a}.${b}`] = g;
+    }
+
+    // channel strips: fader → pan → mute → (meter) → mix
     const mix = ctx.createGain();
-
-    // ---- channel processing (100% wet; the DRY channel is untouched) ----
-    const proc = [];
-    this.dryDrive = new DryDrive(ctx);
-    this.inputs[0].connect(this.dryDrive.input);
-    proc[0] = this.dryDrive.output;
-
-    // WET L — reverb: pre-delay → convolver → tone
-    this.revPre = ctx.createDelay(0.5);
-    this.revConv = ctx.createConvolver();
-    this.revTone = ctx.createBiquadFilter(); this.revTone.type = 'lowpass';
-    this.inputs[1].connect(this.revPre); this.revPre.connect(this.revConv); this.revConv.connect(this.revTone);
-    this.ph1 = new Phaser(ctx, false);
-    this.revTone.connect(this.ph1.input);
-    proc[1] = this.ph1.output;
-
-    // WET R — delay with tone filter in the feedback loop
-    this.dly = ctx.createDelay(2.0);
-    this.dlyFb = ctx.createGain();
-    this.dlyTone = ctx.createBiquadFilter(); this.dlyTone.type = 'lowpass';
-    this.inputs[2].connect(this.dly); this.dly.connect(this.dlyTone);
-    this.dlyTone.connect(this.dlyFb); this.dlyFb.connect(this.dly);
-    this.ph2 = new Phaser(ctx, true);
-    this.dlyTone.connect(this.ph2.input);
-    proc[2] = this.ph2.output;
-
-    // MOD — chorus / flanger (modulated delay) or phaser (allpass sweep)
-    this.lfo = ctx.createOscillator(); this.lfo.frequency.value = 0.8; this.lfo.start();
-    this.modDelay = ctx.createDelay(0.1);
-    this.modDelayLfo = ctx.createGain();
-    this.modDelayFb = ctx.createGain();
-    this.modDelayOut = ctx.createGain();
-    this.lfo.connect(this.modDelayLfo); this.modDelayLfo.connect(this.modDelay.delayTime);
-    this.inputs[3].connect(this.modDelay); this.modDelay.connect(this.modDelayFb); this.modDelayFb.connect(this.modDelay);
-    this.modDelay.connect(this.modDelayOut);
-
-    this.phaseLfo = ctx.createGain();
-    this.lfo.connect(this.phaseLfo);
-    this.allpass = [0, 1, 2, 3].map(() => {
-      const a = ctx.createBiquadFilter(); a.type = 'allpass'; a.frequency.value = 800; a.Q.value = 0.6;
-      this.phaseLfo.connect(a.frequency);
-      return a;
-    });
-    this.phaseFb = ctx.createGain();
-    const phaseLoop = ctx.createDelay(0.01); // a loop needs a delay node
-    this.phaseOut = ctx.createGain();
-    this.inputs[3].connect(this.allpass[0]);
-    for (let i = 0; i < 3; i++) this.allpass[i].connect(this.allpass[i + 1]);
-    this.allpass[3].connect(this.phaseOut);
-    this.allpass[3].connect(this.phaseFb); this.phaseFb.connect(phaseLoop); phaseLoop.connect(this.allpass[0]);
-
-    this.modOn = ctx.createGain();
-    this.modDelayOut.connect(this.modOn); this.phaseOut.connect(this.modOn);
-    proc[3] = this.modOn;
-
-    // ---- channel strips: fader → pan → mute → (meter) → mix ----
-    this.strips = proc.map(src => {
+    this.strips = CHANNELS.map(id => {
       const fader = ctx.createGain();
       const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       const mute = ctx.createGain();
       const meter = ctx.createAnalyser(); meter.fftSize = 512;
-      src.connect(fader);
+      outs[id].connect(fader);
       if (pan) { fader.connect(pan); pan.connect(mute); } else fader.connect(mute);
       mute.connect(mix); mute.connect(meter);
       return { fader, pan, mute, meter };
     });
 
-    // ---- IR SIM: mix → (dry | convolver) → level → destination ----
+    // IR SIM → rig level → destination
     this.irDry = ctx.createGain();
     this.irConv = ctx.createConvolver();
     this.irWet = ctx.createGain();
-    this.irOut = ctx.createGain();
+    this.out = ctx.createGain();
     mix.connect(this.irDry); mix.connect(this.irConv); this.irConv.connect(this.irWet);
-    this.irDry.connect(this.irOut); this.irWet.connect(this.irOut);
-    this.irOut.connect(destination);
+    this.irDry.connect(this.out); this.irWet.connect(this.out);
+    this.out.connect(destination);
     this.irFileBuffer = null;
-    this.irFileName = '';
 
-    // one call per section applies the whole default rig
-    for (const k of ['gain.on', 'amp.on', 'mod.on', 'ph1.on', 'ph2.on', 'dry.mode', 'rev.size', 'dly.time', 'ch.0.level', 'ir.type']) this.set(k, this.p[k], true);
+    for (const g of ['rig', 'pre', 'amp', 'cab', 'mod', 'ra', 'rb', 'da', 'db', 'phra', 'phda', 'phrb', 'phdb', 'dry', 'ch', 'net', 'ir']) this._apply(g, null, true);
   }
 
-  // Patchbay send v → channel b is wired by the synth: amps[v].output → send → inputs[b]
+  setSend(s, c, v) {
+    const g = this.sends[s * CHANNELS.length + c];
+    if (g) g.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  }
 
-  set(path, value, initial = false) {
+  set(path, value) {
     this.p[path] = value;
+    const [group, a] = path.split('.');
+    this._apply(group === 'bpm' ? 'bpm' : group, a, false);
+  }
+
+  _apply(group, a, initial) {
     const P = this.p, t = this.ctx.currentTime;
     const ramp = (param, v, tc = 0.03) => initial ? (param.value = v) : param.setTargetAtTime(v, t, tc);
-    const [group, a] = path.split('.');
-
-    if (group === 'gain') {
-      const on = P['gain.on'];
-      const pre = on ? db2g(P['gain.input']) : 1;
-      for (const amp of this.amps) {
-        ramp(amp.input.gain, pre);
-        amp.shaper.curve = on ? clipCurve(P['gain.clip'], P['gain.drive']) : null;
-        ramp(amp.makeup.gain, 1 / Math.sqrt(pre)); // keep loudness roughly steady as input rises
+    switch (group) {
+      case 'rig': ramp(this.out.gain, P['rig.level']); break;
+      case 'pre': for (const s of this.sources) s.applyPre(P, ramp); break;
+      case 'amp': for (const s of this.sources) s.applyAmp(P, ramp); break;
+      case 'cab': for (const s of this.sources) s.applyCab(P, ramp); break;
+      case 'mod': this.mod.apply(P, ramp); break;
+      case 'ra': case 'rb': this.rev[group].apply(P, group, ramp, initial); break;
+      case 'da': case 'db': this.dly[group].apply(P, group, ramp); break;
+      case 'bpm': this.dly.da.apply(P, 'da', ramp); this.dly.db.apply(P, 'db', ramp); break;
+      case 'phra': case 'phda': case 'phrb': case 'phdb':
+        this.ph[group].apply(P[group + '.on'], P[group + '.rate'], P[group + '.depth'], P[group + '.fdbk'], P[group + '.mix'], ramp); break;
+      case 'dry': this.dry.apply(P, ramp); break;
+      case 'ch': {
+        const anySolo = CHANNELS.some((_, i) => P[`ch.${i}.solo`]);
+        this.strips.forEach((s, i) => {
+          ramp(s.fader.gain, P[`ch.${i}.level`]);
+          if (s.pan) ramp(s.pan.pan, P[`ch.${i}.pan`]);
+          ramp(s.mute.gain, !P[`ch.${i}.mute`] && (!anySolo || P[`ch.${i}.solo`]) ? 1 : 0, 0.01);
+        });
+        break;
       }
-    } else if (group === 'amp') {
-      const on = P['amp.on'];
-      for (const amp of this.amps) {
-        ramp(amp.bass.gain, on ? P['amp.bass'] : 0);
-        ramp(amp.mid.gain, on ? P['amp.mid'] : 0);
-        ramp(amp.treble.gain, on ? P['amp.treble'] : 0);
-        ramp(amp.presence.gain, on ? P['amp.presence'] : 0);
-        ramp(amp.output.gain, on ? P['amp.level'] : 1);
+      case 'net': for (const k in this.net) ramp(this.net[k].gain, P['net.' + k]); break;
+      case 'ir': {
+        if (a === 'type' || initial) this._loadIR(P['ir.type']);
+        const on = P['ir.type'] !== 'off' && (P['ir.type'] !== 'file' || this.irFileBuffer);
+        const m = on ? P['ir.mix'] : 0;
+        ramp(this.irDry.gain, Math.cos(m * Math.PI / 2));
+        ramp(this.irWet.gain, Math.sin(m * Math.PI / 2));
+        break;
       }
-    } else if (group === 'mod') {
-      const type = P['mod.type'], depth = P['mod.depth'], fb = P['mod.feedback'];
-      ramp(this.lfo.frequency, P['mod.rate'], 0.05);
-      const isPhaser = type === 'phaser', isFlanger = type === 'flanger';
-      const base = isFlanger ? 0.003 : 0.018, swing = isFlanger ? 0.0025 * depth : 0.008 * depth;
-      ramp(this.modDelay.delayTime, base, 0.05);
-      ramp(this.modDelayLfo.gain, swing, 0.05);
-      ramp(this.modDelayFb.gain, isFlanger ? fb * 0.95 : fb * 0.35);
-      ramp(this.phaseLfo.gain, 200 + 1200 * depth, 0.05);
-      ramp(this.phaseFb.gain, fb * 0.7);
-      ramp(this.modDelayOut.gain, isPhaser ? 0 : 1);
-      ramp(this.phaseOut.gain, isPhaser ? 1 : 0);
-      ramp(this.modOn.gain, P['mod.on'] ? 1 : 0);
-    } else if (group === 'ph1' || group === 'ph2') {
-      const ph = group === 'ph1' ? this.ph1 : this.ph2;
-      ph.apply(P[group + '.on'], P[group + '.rate'], P[group + '.depth'], P[group + '.fdbk'], P[group + '.mix'], ramp);
-    } else if (group === 'dry') {
-      this.dryDrive.apply(P, ramp);
-    } else if (group === 'rev') {
-      ramp(this.revPre.delayTime, P['rev.predelay'] / 1000, 0.05);
-      ramp(this.revTone.frequency, P['rev.tone'], 0.05);
-      if (a === 'size' || a === 'decay' || initial) this._rebuildReverb(initial);
-    } else if (group === 'dly' || group === 'bpm') {
-      const time = P['dly.sync'] ? Math.min(1.5, 0.75 * 60 / P['bpm']) : P['dly.time'] / 1000; // sync = dotted 8th
-      ramp(this.dly.delayTime, time, 0.08);
-      ramp(this.dlyFb.gain, Math.min(0.92, P['dly.feedback']));
-      ramp(this.dlyTone.frequency, P['dly.tone'], 0.05);
-    } else if (group === 'ch') {
-      const anySolo = [0, 1, 2, 3].some(i => P[`ch.${i}.solo`]);
-      this.strips.forEach((s, i) => {
-        ramp(s.fader.gain, P[`ch.${i}.level`]);
-        if (s.pan) ramp(s.pan.pan, P[`ch.${i}.pan`]);
-        const audible = !P[`ch.${i}.mute`] && (!anySolo || P[`ch.${i}.solo`]);
-        ramp(s.mute.gain, audible ? 1 : 0, 0.01);
-      });
-    } else if (group === 'ir') {
-      if (a === 'type' || initial) this._loadIR(P['ir.type']);
-      const on = P['ir.type'] !== 'off' && (P['ir.type'] !== 'file' || this.irFileBuffer);
-      const m = on ? P['ir.mix'] : 0;
-      ramp(this.irDry.gain, Math.cos(m * Math.PI / 2));
-      ramp(this.irWet.gain, Math.sin(m * Math.PI / 2));
-      ramp(this.irOut.gain, P['ir.level']);
     }
-  }
-
-  _rebuildReverb(now) {
-    clearTimeout(this._revTimer);
-    const build = () => {
-      const sr = this.ctx.sampleRate, size = this.p['rev.size'], decay = this.p['rev.decay'];
-      const len = Math.floor(sr * size);
-      const chans = [0, 1].map(() => {
-        const d = new Float32Array(len);
-        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-        return d;
-      });
-      this.revConv.buffer = toBuffer(this.ctx, chans);
-    };
-    if (now) build(); else this._revTimer = setTimeout(build, 120); // debounce knob drags
   }
 
   _loadIR(type) {
@@ -451,8 +695,18 @@ class FxRig {
       if (p && p.then) p.then(res, rej);
     });
     this.irFileBuffer = buf;
-    this.irFileName = file.name;
     this.set('ir.type', 'file');
+  }
+
+  // Magnitude response (dB) of the pre-amp EQ at the given frequencies.
+  eqResponse(freqs) {
+    const s = this.sources[0], f = new Float32Array(freqs), mag = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
+    const out = new Float32Array(freqs.length);
+    for (const b of [s.hpf, s.low, s.lm, s.hm, s.high, s.lpf]) {
+      b.getFrequencyResponse(f, mag, ph);
+      for (let i = 0; i < out.length; i++) out[i] += 20 * Math.log10(Math.max(1e-6, mag[i]));
+    }
+    return out;
   }
 
   // RMS per channel strip, 0..1
@@ -469,4 +723,11 @@ class FxRig {
 window.FxRig = FxRig;
 window.FX_DEFAULTS = FX_DEFAULTS;
 window.IR_TYPES = IR_TYPES;
+window.CHANNELS = CHANNELS;
 window.CHANNEL_NAMES = CHANNEL_NAMES;
+window.NET_FEEDS = NET_FEEDS;
+window.AMP_MODELS = AMP_MODELS;
+window.CAB_TYPES = CAB_TYPES;
+window.REVERB_TYPES = REVERB_TYPES;
+window.DELAY_TYPES = DELAY_TYPES;
+window.DELAY_DIVS = DELAY_DIVS;

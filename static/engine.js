@@ -63,7 +63,7 @@ class LocalEngine {
     this.mode = 1;
     this.chaos = 0;          // 0 = sends follow the manual matrix exactly
     this.bpm = 126;
-    this.fx = Object.assign({}, FX_DEFAULTS);
+    this.fx = { keys: Object.assign({}, FX_DEFAULTS.keys), drums: Object.assign({}, FX_DEFAULTS.drums) };
     this.drums = {
       steps: 16, swing: 0, preset: 'lam sing',
       tracks: DRUM_TRACKS.map(() => ({ level: 0.8, tune: 0, decay: 1, mute: false, pattern: new Float32Array(16) })),
@@ -73,15 +73,27 @@ class LocalEngine {
     this.drumOn = true;
     this.recording = false;
 
-    // Manual send matrix, row-major [voice*4 + channel];
-    // channels: 0 DRY · 1 WET L (reverb) · 2 WET R (delay) · 3 MOD
-    this.route = new Float32Array([
-      0.9, 0.3, 0.2, 0.4, // khaen
-      0.7, 0.5, 0.3, 0.0, // phin
-      0.5, 0.4, 0.6, 0.2, // so
-      0.9, 0.2, 0.0, 0.0, // klong
-    ]);
-    this.sends = new Float32Array(16); // effective sends after chaos blend
+    // Manual send matrices (the signal network), row-major [source*6 + channel];
+    // channels: DRY · REV A · DLY A · REV B · DLY B · MOD
+    this.route = {
+      keys: new Float32Array([
+        0.9, 0.3, 0.2, 0.1, 0.1, 0.4, // khaen
+        0.7, 0.5, 0.3, 0.2, 0.2, 0.0, // phin
+        0.5, 0.4, 0.6, 0.2, 0.3, 0.2, // so
+        0.9, 0.2, 0.0, 0.1, 0.0, 0.0, // klong
+      ]),
+      drums: new Float32Array([
+        0.9, 0.3, 0.0, 0.0, 0.0, 0.0, // klong
+        0.9, 0.4, 0.2, 0.0, 0.0, 0.0, // slap
+        1.0, 0.1, 0.0, 0.0, 0.0, 0.0, // kick
+        0.9, 0.3, 0.0, 0.5, 0.0, 0.0, // snare
+        0.8, 0.4, 0.3, 0.0, 0.0, 0.0, // ching
+        0.8, 0.2, 0.0, 0.0, 0.0, 0.0, // chap
+      ]),
+    };
+    // effective sends (keys blend in the qubit router with CHAOS)
+    this.sends = { keys: new Float32Array(24), drums: new Float32Array(36) };
+    this._sent = { keys: new Float32Array(24).fill(-1), drums: new Float32Array(36).fill(-1) };
 
     this.router = new QubitRouter();
     this.router.step(0, 0);
@@ -120,8 +132,11 @@ class LocalEngine {
   attach() {
     const s = this.synth;
     s.setMaster(this.master);
-    for (const k in this.fx) s.setFx(k, this.fx[k]);
-    s.setFx('bpm', this.bpm);
+    for (const rig in this.fx) {
+      for (const k in this.fx[rig]) s.setFx(rig, k, this.fx[rig][k]);
+      s.setFx(rig, 'bpm', this.bpm);
+      this._sent[rig].fill(-1);
+    }
     this.retune();
   }
 
@@ -149,7 +164,7 @@ class LocalEngine {
         switch (msg.id) {
           case 'master': this.master = clamp(v, 0, 1); s.setMaster(this.master); break;
           case 'chaos': this.chaos = clamp(v, 0, 1); break;
-          case 'bpm': this.bpm = clamp(v, 30, 240); s.setFx('bpm', this.bpm); break;
+          case 'bpm': this.bpm = clamp(v, 30, 240); s.setFx('keys', 'bpm', this.bpm); s.setFx('drums', 'bpm', this.bpm); break;
         }
         break;
       }
@@ -165,11 +180,13 @@ class LocalEngine {
         if (typeof msg.transpose === 'number') Tuning.transpose = clamp(msg.transpose | 0, -6, 6);
         this.retune();
         break;
-      case 'fx':
-        if (!(msg.path in this.fx)) return;
-        this.fx[msg.path] = msg.value;
-        s.setFx(msg.path, msg.value);
+      case 'fx': {
+        const fx = this.fx[msg.rig];
+        if (!fx || !(msg.path in fx)) return;
+        fx[msg.path] = msg.value;
+        s.setFx(msg.rig, msg.path, msg.value);
         break;
+      }
       case 'drum': {
         const d = this.drums, t = d.tracks[msg.track];
         if (msg.op === 'cell' && t && msg.step >= 0 && msg.step < 16) t.pattern[msg.step] = clamp(msg.value, 0, 1);
@@ -180,9 +197,11 @@ class LocalEngine {
         else if (msg.op === 'clear') d.tracks.forEach(tr => tr.pattern.fill(0));
         break;
       }
-      case 'route':
-        if (msg.voice < 4 && msg.bus < 4) this.route[msg.voice * 4 + msg.bus] = clamp(msg.value, 0, 1);
+      case 'route': {
+        const r = this.route[msg.rig], i = msg.src * CHANNELS.length + msg.ch;
+        if (r && msg.ch >= 0 && msg.ch < CHANNELS.length && i >= 0 && i < r.length) r[i] = clamp(msg.value, 0, 1);
         break;
+      }
       case 'lissajous': {
         const v = msg.voice;
         if (!(v >= 0 && v < 4)) return;
@@ -216,13 +235,23 @@ class LocalEngine {
   // Advance qubits, apply routing, schedule drums. Call ~30×/s.
   step(dt) {
     this.router.step(this.chaos, dt);
-    for (let i = 0; i < 16; i++) {
-      this.sends[i] = clamp(this.route[i] * (1 - this.chaos) + this.router.coeffs[i] * 4 * this.chaos, 0, 1);
+    const nCh = CHANNELS.length;
+    for (let i = 0; i < 24; i++) {
+      const v = i / nCh | 0, c = i % nCh;
+      // the qubit router drives the first four channels of the keys rig
+      const q = c < 4 ? this.router.coeffs[v * 4 + c] * 4 : this.route.keys[i];
+      this.sends.keys[i] = clamp(this.route.keys[i] * (1 - this.chaos) + q * this.chaos, 0, 1);
     }
+    this.sends.drums.set(this.route.drums);
     const s = this.synth;
     if (!s.isInitialized) return;
-    for (let i = 0; i < 16; i++) s.setSendLevel(i >> 2, i & 3, this.sends[i]);
-    this.chLevels = s.channelLevels();
+    for (const rig of ['keys', 'drums']) {
+      const cur = this.sends[rig], last = this._sent[rig];
+      for (let i = 0; i < cur.length; i++) {
+        if (Math.abs(cur[i] - last[i]) > 1e-4) { s.setSendLevel(rig, i / nCh | 0, i % nCh, cur[i]); last[i] = cur[i]; }
+      }
+    }
+    this.chLevels = { keys: s.channelLevels('keys'), drums: s.channelLevels('drums') };
     this._scheduleDrums();
     const lvl = s.outputLevel();
     this.outLevel = Math.max(lvl, this.outLevel * 0.85);
@@ -298,8 +327,8 @@ class LocalEngine {
       master: this.master,
       chaos: this.chaos,
       qcoef: q,
-      sends: Array.from(this.sends),
-      ch_levels: this.chLevels || [0, 0, 0, 0],
+      sends: Array.from(this.sends.keys),
+      ch_levels: this.chLevels || null,
       drum_step: this.drumStepNow(),
       liss_a: 1 + 4 * (q[0] + q[5] + q[10] + q[15]),
       liss_b: 1 + 4 * (q[1] + q[4] + q[11] + q[14]),
